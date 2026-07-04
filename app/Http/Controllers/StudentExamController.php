@@ -14,38 +14,57 @@ class StudentExamController extends Controller
      * Join exam using access code
      */
     public function joinExam(Request $request)
-    {
-        $request->validate([
-            'access_code' => 'required'
-        ]);
+{
+    $request->validate([
+        'student_name' => 'required|string|max:255',
+        'access_code' => 'required|string'
+    ]);
 
-        $exam = Exam::where(
-            'access_code',
-            $request->access_code
-        )->first();
+    $exam = Exam::where('access_code', strtoupper($request->access_code))
+        ->first();
 
-        if (!$exam) {
-
-            return response()->json([
-                'status' => false,
-                'message' => 'Invalid access code'
-            ], 404);
-        }
-
-        $session = ExamSession::create([
-            'exam_id' => $exam->id,
-            'student_id' => auth()->id(),
-            'started_at' => now(),
-            'status' => 'ongoing'
-        ]);
-
+    if (!$exam) {
         return response()->json([
-            'status' => true,
-            'message' => 'Exam joined successfully',
-            'session' => $session,
-            'exam' => $exam
-        ]);
+            'status' => false,
+            'message' => 'Invalid access code'
+        ], 404);
     }
+
+    if ($exam->status !== 'published') {
+        return response()->json([
+            'status' => false,
+            'message' => 'This exam is not open for joining.'
+        ], 403);
+    }
+
+    $session = ExamSession::create([
+        'exam_id' => $exam->id,
+        'student_name' => $request->student_name,
+        'started_at' => null,
+        'status' => 'ongoing'
+    ]);
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Student joined lobby successfully',
+        'session' => $session,
+        'exam' => $exam
+    ]);
+
+}
+
+public function lobbyStudents($id)
+{
+    $sessions = ExamSession::where('exam_id', $id)
+        ->where('status', 'ongoing')
+        ->latest()
+        ->get();
+
+    return response()->json([
+        'status' => true,
+        'data' => $sessions
+    ]);
+}
 
     /**
      * Get exam questions

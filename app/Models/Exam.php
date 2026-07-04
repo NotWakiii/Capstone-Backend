@@ -9,15 +9,21 @@ class Exam extends Model
     protected $fillable = [
         'title',
         'description',
+        'course',
         'duration',
+        'passing',
         'access_code',
         'created_by',
         'status'
     ];
 
-    // relationship to user
     public function user()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function questions()
+    {
+        return $this->hasMany(Question::class);
     }
 }
