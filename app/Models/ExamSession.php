@@ -14,28 +14,35 @@ class ExamSession extends Model
         'score',
         'percentage',
         'progress',
+        'current_question',
         'tab_switches',
         'idle_seconds',
+        'time_remaining',
+        'last_seen_at',
         'time_spent',
-        'status'
+        'status',
     ];
 
     protected $casts = [
         'started_at' => 'datetime',
         'submitted_at' => 'datetime',
+        'last_seen_at' => 'datetime',
+
+        'score' => 'integer',
+        'progress' => 'integer',
+        'current_question' => 'integer',
+        'tab_switches' => 'integer',
+        'idle_seconds' => 'integer',
+        'time_remaining' => 'integer',
+        'time_spent' => 'integer',
+        'percentage' => 'decimal:2',
     ];
 
-    /**
-     * Exam Relationship
-     */
     public function exam()
     {
         return $this->belongsTo(Exam::class);
     }
 
-    /**
-     * Student Answers
-     */
     public function answers()
     {
         return $this->hasMany(StudentAnswer::class);

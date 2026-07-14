@@ -9,6 +9,7 @@ use App\Models\Question;
 use App\Models\QuestionOption;
 use Illuminate\Support\Facades\DB;
 
+
 use App\Models\ExamSession;
 
 class ExamController extends Controller
@@ -140,7 +141,7 @@ public function restartExam($id)
         ], 404);
     }
 
-   
+
 
     $exam->update([
         'status' => 'published',
@@ -304,19 +305,32 @@ public function startExam($id)
     if (!$exam) {
         return response()->json([
             'status' => false,
-            'message' => 'Exam not found'
+            'message' => 'Exam not found.',
         ], 404);
+    }
+
+    if ($exam->status !== 'published') {
+        return response()->json([
+            'status' => false,
+            'message' => 'Only a published exam can be started.',
+        ], 422);
     }
 
     $exam->update([
         'status' => 'started',
-        'started_at' => now()
+        'started_at' => now(),
     ]);
+
+    ExamSession::where('exam_id', $exam->id)
+        ->where('status', 'ongoing')
+        ->update([
+            'started_at' => now(),
+        ]);
 
     return response()->json([
         'status' => true,
-        'message' => 'Exam started successfully',
-        'data' => $exam
+        'message' => 'Exam started successfully.',
+        'data' => $exam->fresh(),
     ]);
 }
 
