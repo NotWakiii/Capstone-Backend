@@ -10,6 +10,7 @@ use App\Models\QuestionOption;
 use Illuminate\Support\Facades\DB;
 
 
+
 use App\Models\ExamSession;
 
 class ExamController extends Controller
@@ -159,31 +160,60 @@ public function restartExam($id)
 
 public function endExam($id)
 {
-    $exam = Exam::find($id);
+    $exam = Exam::with('questions')->find($id);
 
     if (!$exam) {
         return response()->json([
             'status' => false,
-            'message' => 'Exam not found'
+            'message' => 'Examination not found.',
         ], 404);
+    }
+
+    $totalPoints = (int) $exam->questions->sum('points');
+
+    $sessions = ExamSession::with([
+        'answers.question',
+    ])
+        ->where('exam_id', $exam->id)
+        ->where('status', 'ongoing')
+        ->get();
+
+    foreach ($sessions as $session) {
+        $score = 0;
+
+        foreach ($session->answers as $answer) {
+            if (
+                $answer->is_correct &&
+                $answer->question
+            ) {
+                $score += (int) $answer->question->points;
+            }
+        }
+
+        $percentage = $totalPoints > 0
+            ? round(
+                ($score / $totalPoints) * 100,
+                2
+            )
+            : 0;
+
+        $session->update([
+            'submitted_at' => now(),
+            'score' => $score,
+            'percentage' => $percentage,
+            'progress' => 100,
+            'status' => 'submitted',
+        ]);
     }
 
     $exam->update([
         'status' => 'finished',
-        'ended_at' => now()
     ]);
-
-    ExamSession::where('exam_id', $id)
-        ->where('status', 'ongoing')
-        ->update([
-            'status' => 'submitted',
-            'submitted_at' => now()
-        ]);
 
     return response()->json([
         'status' => true,
-        'message' => 'Exam ended successfully',
-        'data' => $exam
+        'message' => 'Examination ended successfully.',
+        'submitted_students' => $sessions->count(),
     ]);
 }
 

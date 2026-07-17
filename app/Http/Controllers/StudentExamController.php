@@ -78,7 +78,7 @@ class StudentExamController extends Controller
     /**
      * Public exam status for the student lobby.
      */
-    public function examStatus($id)
+   public function examStatus($id)
     {
         $exam = Exam::withCount('questions')
             ->find($id);
@@ -86,9 +86,23 @@ class StudentExamController extends Controller
         if (!$exam) {
             return response()->json([
                 'status' => false,
-                'message' => 'Exam not found.',
+                'message' => 'Examination not found.',
             ], 404);
         }
+
+        $ongoingStudents = ExamSession::where(
+            'exam_id',
+            $exam->id
+        )
+            ->where('status', 'ongoing')
+            ->count();
+
+        $submittedStudents = ExamSession::where(
+            'exam_id',
+            $exam->id
+        )
+            ->where('status', 'submitted')
+            ->count();
 
         return response()->json([
             'status' => true,
@@ -96,10 +110,15 @@ class StudentExamController extends Controller
                 'id' => $exam->id,
                 'title' => $exam->title,
                 'course' => $exam->course,
-                'duration' => $exam->duration,
-                'passing' => $exam->passing,
+                'duration' => (int) $exam->duration,
+                'passing' => (float) ($exam->passing ?? 75),
                 'status' => $exam->status,
                 'questions_count' => $exam->questions_count,
+                'ongoing_students' => $ongoingStudents,
+                'submitted_students' => $submittedStudents,
+                'leaderboard_available' =>
+                    strtolower((string) $exam->status) === 'finished'
+                    || $ongoingStudents === 0,
             ],
         ]);
     }
@@ -168,13 +187,13 @@ class StudentExamController extends Controller
         if (
             !in_array(
                 strtolower($exam->status),
-                ['started', 'finished'],
+                ['started'],
                 true
             )
         ) {
             return response()->json([
                 'status' => false,
-                'message' => 'The exam has not started yet.',
+                'message' => 'The examination is not currently active.',
             ], 403);
         }
 
@@ -211,111 +230,219 @@ class StudentExamController extends Controller
     /**
      * Save answer
      */
-    public function saveAnswer(Request $request)
-    {
-        $validated = $request->validate([
-            'exam_session_id' => 'required|integer|exists:exam_sessions,id',
-            'question_id' => 'required|integer|exists:questions,id',
-            'answer' => 'required',
-        ]);
+ public function saveAnswer(Request $request)
+{
+    $validated = $request->validate([
+        'exam_session_id' => [
+            'required',
+            'integer',
+            'exists:exam_sessions,id',
+        ],
 
-        $session = ExamSession::find($validated['exam_session_id']);
+        'question_id' => [
+            'required',
+            'integer',
+            'exists:questions,id',
+        ],
 
-        if (!$session) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Session not found.',
-            ], 404);
-        }
+        'answer' => [
+            'required',
+        ],
+    ]);
 
-        if ($session->status === 'submitted') {
-            return response()->json([
-                'status' => false,
-                'message' => 'This exam has already been submitted.',
-            ], 403);
-        }
+    $session = ExamSession::findOrFail(
+        $validated['exam_session_id']
+    );
 
-        $question = Question::with([
-            'options',
-            'matchingPairs',
-        ])->find($validated['question_id']);
+    if ($session->status === 'submitted') {
+        return response()->json([
+            'status' => false,
+            'message' => 'This examination has already been submitted.',
+        ], 403);
+    }
 
-        if (!$question) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Question not found.',
-            ], 404);
-        }
+    $exam = Exam::find($session->exam_id);
 
-        if ($question->exam_id !== $session->exam_id) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Question does not belong to this exam.',
-            ], 422);
-        }
+    if (!$exam) {
+        return response()->json([
+            'status' => false,
+            'message' => 'Examination not found.',
+        ], 404);
+    }
 
-        $submittedAnswer = $validated['answer'];
-        $isCorrect = false;
+    if (strtolower((string) $exam->status) !== 'started') {
+        return response()->json([
+            'status' => false,
+            'message' => 'The examination has already ended.',
+        ], 403);
+    }
 
-        if ($question->question_type === 'identification') {
-            $isCorrect =
-                strtolower(trim((string) $submittedAnswer)) ===
-                strtolower(trim((string) $question->answer));
-        }
+    $question = Question::with([
+        'options',
+        'matchingPairs',
+    ])->findOrFail(
+        $validated['question_id']
+    );
 
-        if (
-            $question->question_type === 'multiple_choice' ||
-            $question->question_type === 'true_false'
-        ) {
-            foreach ($question->options as $option) {
-                if (
-                    $option->is_correct &&
-                    strtolower(trim($option->option_text)) ===
-                    strtolower(trim((string) $submittedAnswer))
-                ) {
-                    $isCorrect = true;
-                    break;
-                }
-            }
-        }
+    if ((int) $question->exam_id !== (int) $session->exam_id) {
+        return response()->json([
+            'status' => false,
+            'message' => 'This question does not belong to the examination.',
+        ], 422);
+    }
 
-        StudentAnswer::updateOrCreate(
-            [
-                'exam_session_id' => $session->id,
-                'question_id' => $question->id,
-            ],
-            [
-                'answer' => is_array($submittedAnswer)
-                    ? json_encode($submittedAnswer)
-                    : (string) $submittedAnswer,
-                'is_correct' => $isCorrect,
-            ]
+    $submittedAnswer = is_array($validated['answer'])
+        ? $validated['answer']
+        : trim((string) $validated['answer']);
+
+    $questionType = strtolower(
+        trim((string) $question->question_type)
+    );
+
+    $isCorrect = false;
+
+    /*
+    |--------------------------------------------------------------------------
+    | IDENTIFICATION
+    |--------------------------------------------------------------------------
+    */
+
+    if ($questionType === 'identification') {
+        $studentAnswer = strtolower(
+            trim((string) $submittedAnswer)
         );
 
-        $totalQuestions = Question::where(
-            'exam_id',
-            $session->exam_id
-        )->count();
+        $correctAnswer = strtolower(
+            trim((string) $question->answer)
+        );
 
-        $answeredQuestions = StudentAnswer::where(
-            'exam_session_id',
-            $session->id
-        )->count();
-
-        $progress = $totalQuestions > 0
-            ? round(($answeredQuestions / $totalQuestions) * 100)
-            : 0;
-
-        $session->update([
-            'progress' => $progress,
-        ]);
-
-        return response()->json([
-            'status' => true,
-            'message' => 'Answer saved.',
-            'progress' => $progress,
-        ]);
+        $isCorrect =
+            $studentAnswer === $correctAnswer;
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | MULTIPLE CHOICE
+    |--------------------------------------------------------------------------
+    */
+
+    if ($questionType === 'multiple_choice') {
+        $studentAnswer = strtolower(
+            trim((string) $submittedAnswer)
+        );
+
+        foreach ($question->options as $option) {
+            $optionText = strtolower(
+                trim((string) $option->option_text)
+            );
+
+            $optionId = (string) $option->id;
+
+            $matchesText =
+                $studentAnswer === $optionText;
+
+            $matchesId =
+                (string) $submittedAnswer === $optionId;
+
+            if (
+                (bool) $option->is_correct &&
+                ($matchesText || $matchesId)
+            ) {
+                $isCorrect = true;
+                break;
+            }
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | TRUE OR FALSE
+    |--------------------------------------------------------------------------
+    */
+
+    if ($questionType === 'true_false') {
+        $studentAnswer = strtolower(
+            trim((string) $submittedAnswer)
+        );
+
+        $correctAnswer = strtolower(
+            trim((string) $question->answer)
+        );
+
+        $isCorrect =
+            $studentAnswer === $correctAnswer;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | ESSAY
+    |--------------------------------------------------------------------------
+    |
+    | Essays normally require manual checking, so they are saved as
+    | incorrect for now until the professor grades them.
+    |
+    */
+
+    if ($questionType === 'essay') {
+        $isCorrect = false;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | SAVE OR UPDATE THE ANSWER
+    |--------------------------------------------------------------------------
+    */
+
+    $savedAnswer = StudentAnswer::updateOrCreate(
+        [
+            'exam_session_id' => $session->id,
+            'question_id' => $question->id,
+        ],
+        [
+            'answer' => is_array($submittedAnswer)
+                ? json_encode($submittedAnswer)
+                : (string) $submittedAnswer,
+
+            'is_correct' => $isCorrect,
+        ]
+    );
+
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE STUDENT PROGRESS
+    |--------------------------------------------------------------------------
+    */
+
+    $totalQuestions = Question::where(
+        'exam_id',
+        $session->exam_id
+    )->count();
+
+    $answeredQuestions = StudentAnswer::where(
+        'exam_session_id',
+        $session->id
+    )->count();
+
+    $progress = $totalQuestions > 0
+        ? round(
+            ($answeredQuestions / $totalQuestions) * 100
+        )
+        : 0;
+
+    $session->update([
+        'progress' => $progress,
+    ]);
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Answer saved successfully.',
+        'data' => [
+            'answer_id' => $savedAnswer->id,
+            'is_correct' => $isCorrect,
+            'progress' => $progress,
+        ],
+    ]);
+}
 
     /**
      * Submit exam
@@ -335,10 +462,30 @@ class StudentExamController extends Controller
         }
 
         if ($session->status === 'submitted') {
+            $totalPoints = $session->exam
+                ? (int) $session->exam->questions->sum('points')
+                : 0;
+
             return response()->json([
-                'status' => false,
-                'message' => 'This exam has already been submitted.',
-            ], 409);
+                'status' => true,
+                'message' => 'This examination was already submitted.',
+                'data' => [
+                    'session_id' => $session->id,
+                    'exam_id' => $session->exam_id,
+                    'student_name' => $session->student_name,
+                    'score' => (int) $session->score,
+                    'total_points' => $totalPoints,
+                    'percentage' => (float) $session->percentage,
+                    'passing' => $session->exam->passing ?? 75,
+                    'result_status' =>
+                        (float) $session->percentage >=
+                        (float) ($session->exam->passing ?? 75)
+                            ? 'Passed'
+                            : 'Failed',
+                    'time_spent' => (int) $session->time_spent,
+                    'submitted_at' => $session->submitted_at,
+                ],
+            ]);
         }
 
         DB::beginTransaction();

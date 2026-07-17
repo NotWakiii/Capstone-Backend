@@ -5,13 +5,247 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\ExamSession;
 use App\Models\Question;
+use App\Models\Exam;
 
 class ResultController extends Controller
 {
     /**
-     * Faculty View All Results
-     */
-   public function index()
+ * Return the student's own examination result.
+ */
+public function studentResult($sessionId)
+    {
+        $session = ExamSession::with([
+            'exam',
+            'answers.question',
+        ])->find($sessionId);
+
+        if (!$session) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Student result not found.',
+            ], 404);
+        }
+
+        if ($session->status !== 'submitted') {
+            return response()->json([
+                'status' => false,
+                'message' => 'The examination has not been submitted yet.',
+            ], 403);
+        }
+
+        if (!$session->exam) {
+            return response()->json([
+                'status' => false,
+                'message' => 'The examination record is unavailable.',
+            ], 404);
+        }
+
+        $totalPoints = (int) Question::where(
+            'exam_id',
+            $session->exam_id
+        )->sum('points');
+
+        $totalQuestions = Question::where(
+            'exam_id',
+            $session->exam_id
+        )->count();
+
+        $correctAnswers = $session->answers
+            ->where('is_correct', true)
+            ->count();
+
+        $wrongAnswers = max(
+            $totalQuestions - $correctAnswers,
+            0
+        );
+
+        $percentage = (float) $session->percentage;
+
+        if ($totalPoints > 0) {
+            $percentage = round(
+                ((int) $session->score / $totalPoints) * 100,
+                2
+            );
+        }
+
+        $passing = (float) (
+            $session->exam->passing ?? 75
+        );
+
+        $ongoingStudents = ExamSession::where(
+            'exam_id',
+            $session->exam_id
+        )
+            ->where('status', 'ongoing')
+            ->count();
+
+        $leaderboardAvailable =
+            strtolower((string) $session->exam->status) === 'finished'
+            || $ongoingStudents === 0;
+
+        $rank = null;
+
+        if ($leaderboardAvailable) {
+            $rank = ExamSession::where(
+                'exam_id',
+                $session->exam_id
+            )
+                ->where('status', 'submitted')
+                ->where(function ($query) use ($session) {
+                    $query
+                        ->where(
+                            'percentage',
+                            '>',
+                            $session->percentage
+                        )
+                        ->orWhere(function ($samePercentage) use ($session) {
+                            $samePercentage
+                                ->where(
+                                    'percentage',
+                                    $session->percentage
+                                )
+                                ->where(
+                                    'score',
+                                    '>',
+                                    $session->score
+                                );
+                        })
+                        ->orWhere(function ($sameScore) use ($session) {
+                            $sameScore
+                                ->where(
+                                    'percentage',
+                                    $session->percentage
+                                )
+                                ->where(
+                                    'score',
+                                    $session->score
+                                )
+                                ->where(
+                                    'time_spent',
+                                    '<',
+                                    $session->time_spent
+                                );
+                        });
+                })
+                ->count() + 1;
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'session_id' => $session->id,
+                'exam_id' => $session->exam_id,
+                'student_name' => $session->student_name,
+                'exam_title' => $session->exam->title ?? 'Examination',
+                'course' => $session->exam->course ?? 'No Course',
+                'score' => (int) $session->score,
+                'total_points' => $totalPoints,
+                'percentage' => $percentage,
+                'passing' => $passing,
+                'correct_answers' => $correctAnswers,
+                'wrong_answers' => $wrongAnswers,
+                'total_questions' => $totalQuestions,
+                'time_spent' => (int) $session->time_spent,
+                'rank' => $rank,
+                'leaderboard_available' => $leaderboardAvailable,
+                'result_status' =>
+                    $percentage >= $passing
+                        ? 'Passed'
+                        : 'Failed',
+                'submitted_at' => $session->submitted_at,
+            ],
+        ]);
+    }
+
+
+/**
+ * Return the Top 5 students with their visible scores.
+ */
+public function studentLeaderboard($examId)
+    {
+        $exam = Exam::with('questions')->find($examId);
+
+        if (!$exam) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Examination not found.',
+            ], 404);
+        }
+
+        $ongoingStudents = ExamSession::where(
+            'exam_id',
+            $exam->id
+        )
+            ->where('status', 'ongoing')
+            ->count();
+
+        $leaderboardAvailable =
+            strtolower((string) $exam->status) === 'finished'
+            || $ongoingStudents === 0;
+
+        if (!$leaderboardAvailable) {
+            return response()->json([
+                'status' => true,
+                'leaderboard_available' => false,
+                'message' =>
+                    'The Top 5 ranking will be available after the examination ends.',
+                'data' => [],
+            ]);
+        }
+
+        $totalPoints = (int) $exam->questions->sum('points');
+        $passing = (float) ($exam->passing ?? 75);
+
+        $sessions = ExamSession::where(
+            'exam_id',
+            $exam->id
+        )
+            ->where('status', 'submitted')
+            ->orderByDesc('percentage')
+            ->orderByDesc('score')
+            ->orderBy('time_spent')
+            ->orderBy('submitted_at')
+            ->limit(5)
+            ->get();
+
+        $leaderboard = $sessions
+            ->values()
+            ->map(function ($session, $index) use (
+                $totalPoints,
+                $passing
+            ) {
+                $percentage = (float) $session->percentage;
+
+                if ($totalPoints > 0) {
+                    $percentage = round(
+                        ((int) $session->score / $totalPoints) * 100,
+                        2
+                    );
+                }
+
+                return [
+                    'rank' => $index + 1,
+                    'session_id' => $session->id,
+                    'student_name' => $session->student_name,
+                    'score' => (int) $session->score,
+                    'total_points' => $totalPoints,
+                    'percentage' => $percentage,
+                    'time_spent' => (int) $session->time_spent,
+                    'result_status' =>
+                        $percentage >= $passing
+                            ? 'Passed'
+                            : 'Failed',
+                ];
+            });
+
+        return response()->json([
+            'status' => true,
+            'leaderboard_available' => true,
+            'data' => $leaderboard,
+        ]);
+    }
+
+    public function index()
 {
     $results = ExamSession::with([
         'exam',
@@ -40,7 +274,14 @@ class ResultController extends Controller
         ->latest()
         ->get();
 
-        $exam = $sessions->first()?->exam;
+        $exam = Exam::find($id);
+
+        if (!$exam) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Examination not found.',
+            ], 404);
+        }
 
         $results = $sessions->map(function ($session) {
 
