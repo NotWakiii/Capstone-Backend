@@ -244,3 +244,30 @@ Route::middleware('auth:sanctum')->group(function () {
         [ResultController::class, 'itemAnalysis']
     );
 });
+
+//Exam Result Controller
+use App\Http\Controllers\ExamResultController;
+
+Route::middleware('auth:sanctum')->group(function () {
+
+    Route::get(
+        '/faculty/exam-results',
+        [ExamResultController::class, 'index']
+    );
+
+    Route::get(
+        '/faculty/exams/{examId}/results',
+        [ExamResultController::class, 'show']
+    );
+
+    Route::get(
+        '/faculty/exam-sessions/{sessionId}/result',
+        [ExamResultController::class, 'studentResult']
+    );
+
+    Route::get(
+        '/faculty/exam-results/{examId}',
+        [ExamResultController::class, 'show']
+    );
+
+});
