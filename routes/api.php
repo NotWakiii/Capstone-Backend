@@ -9,6 +9,7 @@ use App\Http\Controllers\QuestionController;
 use App\Http\Controllers\StudentExamController;
 use App\Http\Controllers\MonitoringController;
 use App\Http\Controllers\ResultController;
+use App\Http\Controllers\ExamResultController;
 
 /*
 |--------------------------------------------------------------------------
@@ -246,8 +247,6 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 //Exam Result Controller
-use App\Http\Controllers\ExamResultController;
-
 Route::middleware('auth:sanctum')->group(function () {
 
     Route::get(

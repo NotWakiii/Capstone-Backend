@@ -202,6 +202,7 @@ class StudentExamController extends Controller
             'matchingPairs',
         ])
             ->where('exam_id', $examId)
+            ->inRandomOrder()
             ->get();
 
         // Do not expose correct answers to students.
@@ -226,7 +227,6 @@ class StudentExamController extends Controller
             'data' => $questions,
         ]);
     }
-
     /**
      * Save answer
      */
