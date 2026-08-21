@@ -10,6 +10,7 @@ class Question extends Model
     'exam_id',
     'question',
     'question_type',
+    'competency',
     'answer',
     'points',
     'time_limit',

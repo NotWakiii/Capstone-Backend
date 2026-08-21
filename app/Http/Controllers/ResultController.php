@@ -412,32 +412,55 @@ public function studentLeaderboard($examId)
 
         $answers = $question->answers;
 
-        $correct = $answers->where('is_correct', true)->count();
+        $correct = $answers
+            ->where('is_correct', true)
+            ->count();
 
-        $wrong = max($totalStudents - $correct, 0);
+        $wrong = max(
+            $totalStudents - $correct,
+            0
+        );
 
         $successRate = $totalStudents > 0
-            ? round(($correct / $totalStudents) * 100)
+            ? round(
+                ($correct / $totalStudents) * 100
+            )
             : 0;
 
         $wrongAnswers = $answers
             ->where('is_correct', false)
             ->groupBy('answer')
-            ->map(fn ($group) => $group->count())
+            ->map(
+                fn ($group) => $group->count()
+            )
             ->sortDesc();
 
-        $commonWrongAnswer = $wrongAnswers->keys()->first() ?? 'None';
+        $commonWrongAnswer =
+            $wrongAnswers->keys()->first()
+            ?? 'None';
 
         return [
             'id' => $question->id,
+
             'number' => $index + 1,
+
             'question' => $question->question,
+
+            // ADD THIS
+            'competency' => $question->competency,
+
             'type' => $question->question_type,
+
             'successRate' => $successRate,
+
             'correct' => $correct,
+
             'wrong' => $wrong,
+
             'total' => $totalStudents,
+
             'discrimination' => 'N/A',
+
             'commonWrongAnswer' => $commonWrongAnswer
         ];
     });
@@ -447,26 +470,4 @@ public function studentLeaderboard($examId)
         'data' => $items
     ]);
 }
-
-    /**
-     * Overall Summary
-     */
-    public function summary()
-    {
-        $sessions = ExamSession::all();
-
-        return response()->json([
-
-            'total_attempts' => $sessions->count(),
-
-            'highest_score' => $sessions->max('score'),
-
-            'lowest_score' => $sessions->min('score'),
-
-            'average_score' => round(
-                $sessions->avg('score'),
-                2
-            )
-        ]);
-    }
 }

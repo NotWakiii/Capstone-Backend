@@ -36,10 +36,13 @@ class ExamController extends Controller
     $request->validate([
         'title' => 'required|string|max:255',
         'description' => 'nullable|string',
-        'course' => 'required|string|max:255',
         'passing' => 'required|integer|min:1|max:100',
         'duration' => 'required|integer|min:1',
         'questions' => 'required|array|min:1',
+        'questions.*.competency' => 'nullable|string|max:1000',
+        'grade' => 'required|string|max:50',
+        'section' => 'required|string|max:100',
+        'subject' => 'required|string|max:255',
     ]);
 
     DB::beginTransaction();
@@ -48,12 +51,14 @@ class ExamController extends Controller
         $exam = Exam::create([
             'title' => $request->title,
             'description' => $request->description,
-            'course' => $request->course,
             'duration' => $request->duration,
             'passing' => $request->passing,
             'access_code' => strtoupper(Str::random(6)),
             'created_by' => auth()->id(),
-            'status' => 'draft'
+            'status' => 'draft',
+            'grade' => $request->grade,
+            'section' => $request->section,
+            'subject' => $request->subject,
         ]);
 
         foreach ($request->questions as $index => $item) {
@@ -69,6 +74,7 @@ class ExamController extends Controller
                 'exam_id' => $exam->id,
                 'question' => $item['question'],
                 'question_type' => $type,
+                'competency' => $item['competency'] ?? null,
                 'answer' => $item['answer'] ?? null,
                 'points' => $item['points'] ?? 1,
                 'time_limit' => $item['time'] ?? 30,
@@ -225,10 +231,10 @@ public function endExam($id)
     $request->validate([
         'title' => 'required|string|max:255',
         'description' => 'nullable|string',
-        'course' => 'required|string|max:255',
         'duration' => 'required|integer|min:1',
         'passing' => 'required|integer|min:1|max:100',
         'questions' => 'required|array|min:1',
+        'questions.*.competency' => 'nullable|string|max:1000',
     ]);
 
     $exam = Exam::find($id);
@@ -246,7 +252,6 @@ public function endExam($id)
         $exam->update([
             'title' => $request->title,
             'description' => $request->description,
-            'course' => $request->course,
             'duration' => $request->duration,
             'passing' => $request->passing,
         ]);
@@ -266,6 +271,7 @@ public function endExam($id)
                 'exam_id' => $exam->id,
                 'question' => $item['question'],
                 'question_type' => $type,
+                'competency' => $item['competency'] ?? null,
                 'answer' => $item['answer'] ?? null,
                 'points' => $item['points'] ?? 1,
                 'time_limit' => $item['time'] ?? 30,

@@ -9,12 +9,14 @@ class Exam extends Model
     protected $fillable = [
         'title',
         'description',
-        'course',
         'duration',
         'passing',
         'access_code',
         'created_by',
-        'status'
+        'status',
+        'grade',
+        'section',
+        'subject',
     ];
 
     public function user()
