@@ -14,62 +14,122 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $request->validate([
-            'name' => 'required',
-            'email' => 'required|email|unique:users',
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
             'password' => 'required|min:6',
-            'role' => 'required'
         ]);
 
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'role' => 'faculty',
-            'password' => Hash::make($request->password)
+            'password' => Hash::make(
+                $request->password
+            ),
         ]);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $user
+            ->createToken('auth_token')
+            ->plainTextToken;
 
         return response()->json([
-            'message' => 'User registered successfully',
-            'token' => $token,
-            'user' => $user
-        ]);
+            'message' =>
+                'User registered successfully',
+
+            'token' =>
+                $token,
+
+            'user' =>
+                $user,
+        ], 201);
     }
+
 
     // LOGIN
     public function login(Request $request)
-{
-    $request->validate([
-        'name' => 'required',
-        'password' => 'required'
-    ]);
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required'
+        ]);
 
-    $user = User::where('name', $request->name)
-        ->where('role', 'faculty')
-        ->first();
+        // Find account by email
+        $user = User::where(
+            'email',
+            $request->email
+        )->first();
 
-    if (!$user || !Hash::check($request->password, $user->password)) {
-        throw ValidationException::withMessages([
-            'name' => ['Invalid username or password']
+        // Check account and password
+        if (
+            !$user ||
+            !Hash::check(
+                $request->password,
+                $user->password
+            )
+        ) {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'Invalid email or password'
+                ]
+            ]);
+        }
+
+        // =====================================
+        // BLOCK INACTIVE FACULTY
+        // =====================================
+        if (
+            $user->role === 'faculty' &&
+            $user->status !== 'active'
+        ) {
+            return response()->json([
+                'message' =>
+                    'Your account has been deactivated. Please contact the administrator.'
+            ], 403);
+        }
+
+        // Only allowed roles
+        if (
+            !in_array(
+                $user->role,
+                ['faculty', 'admin']
+            )
+        ) {
+            return response()->json([
+                'message' =>
+                    'Unauthorized account role.'
+            ], 403);
+        }
+
+        // Create token ONLY after all checks pass
+        $token =
+            $user->createToken(
+                'auth_token'
+            )->plainTextToken;
+
+        return response()->json([
+            'message' =>
+                'Login successful',
+
+            'token' =>
+                $token,
+
+            'user' =>
+                $user
         ]);
     }
 
-    $token = $user->createToken('auth_token')->plainTextToken;
-
-    return response()->json([
-        'message' => 'Login successful',
-        'token' => $token,
-        'user' => $user
-    ]);
-}
 
     // LOGOUT
     public function logout(Request $request)
     {
-        $request->user()->tokens()->delete();
+        $request
+            ->user()
+            ->tokens()
+            ->delete();
 
         return response()->json([
-            'message' => 'Logged out successfully'
+            'message' =>
+                'Logged out successfully'
         ]);
     }
 }

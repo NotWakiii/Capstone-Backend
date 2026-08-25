@@ -11,6 +11,8 @@ use App\Http\Controllers\MonitoringController;
 use App\Http\Controllers\ResultController;
 use App\Http\Controllers\ExamResultController;
 
+use App\Http\Controllers\AdminController;
+
 /*
 |--------------------------------------------------------------------------
 | PUBLIC AUTH ROUTES
@@ -244,6 +246,10 @@ Route::middleware('auth:sanctum')->group(function () {
         '/exams/{id}/item-analysis',
         [ResultController::class, 'itemAnalysis']
     );
+    Route::get(
+    '/exams/{id}/item-analysis/pdf',
+    [ResultController::class, 'exportItemAnalysisPdf']
+);
 });
 
 //Exam Result Controller
@@ -267,6 +273,62 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get(
         '/faculty/exam-results/{examId}',
         [ExamResultController::class, 'show']
+    );
+
+});
+
+//ADMIN ROUTES
+use App\Http\Controllers\AdminFacultyController;
+use App\Http\Controllers\AdminExamController;
+use App\Http\Controllers\AdminResultController;
+
+Route::middleware([
+    'auth:sanctum',
+    'admin'
+])->prefix('admin')->group(function () {
+
+    Route::get(
+        '/dashboard',
+        [AdminController::class, 'dashboard']
+    );
+
+    Route::get(
+        '/faculty',
+        [AdminFacultyController::class, 'index']
+    );
+
+    Route::post(
+        '/faculty',
+        [AdminFacultyController::class, 'store']
+    );
+
+    Route::put(
+        '/faculty/{id}',
+        [AdminFacultyController::class, 'update']
+    );
+
+    Route::delete(
+        '/faculty/{id}',
+        [AdminFacultyController::class, 'destroy']
+    );
+
+    Route::get(
+        '/exams',
+        [AdminExamController::class, 'index']
+    );
+
+    Route::get(
+        '/results',
+        [AdminResultController::class, 'index']
+    );
+
+    Route::get(
+        '/results/{examId}',
+        [AdminResultController::class, 'show']
+    );
+    Route::patch(
+        '/faculty/{id}/status',
+        [AdminFacultyController::class, 'updateStatus']
     );
 
 });

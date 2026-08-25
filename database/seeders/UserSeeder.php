@@ -18,5 +18,13 @@ class UserSeeder extends Seeder
                 'role' => 'faculty',
             ]
         );
+        User::updateOrCreate(
+            ['name' => 'faculty2'],
+            [
+                'email' => 'faculty2@ispas.local',
+                'password' => Hash::make('faculty123'),
+                'role' => 'faculty',
+            ]
+        );
     }
 }

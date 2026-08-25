@@ -8,6 +8,33 @@ use App\Models\ExamSession;
 
 class MonitoringController extends Controller
 {
+    private function findAccessibleSession($sessionId)
+{
+    $user = auth()->user();
+
+    if (!$user) {
+        return null;
+    }
+
+    $query = ExamSession::with('exam')
+        ->where('id', $sessionId);
+
+    // Faculty can only access sessions
+    // belonging to their own exams.
+    if ($user->role !== 'admin') {
+        $query->whereHas(
+            'exam',
+            function ($examQuery) use ($user) {
+                $examQuery->where(
+                    'created_by',
+                    $user->id
+                );
+            }
+        );
+    }
+
+    return $query->first();
+}
     public function logActivity(Request $request)
     {
         $validated = $request->validate([
@@ -153,18 +180,30 @@ class MonitoringController extends Controller
         ]);
     }
 
-    public function getLogs($sessionId)
-    {
-        $logs = MonitorLog::where(
-            'exam_session_id',
-            $sessionId
-        )
-            ->latest()
-            ->get();
+public function getLogs($sessionId)
+{
+    $session = $this->findAccessibleSession(
+        $sessionId
+    );
 
+    if (!$session) {
         return response()->json([
-            'status' => true,
-            'data' => $logs,
-        ]);
+            'status' => false,
+            'message' =>
+                'Session not found or access denied.',
+        ], 404);
     }
+
+    $logs = MonitorLog::where(
+        'exam_session_id',
+        $session->id
+    )
+        ->latest()
+        ->get();
+
+    return response()->json([
+        'status' => true,
+        'data' => $logs,
+    ]);
+}
 }

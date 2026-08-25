@@ -2,17 +2,107 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
+use App\Models\Exam;
 use App\Models\ExamSession;
 use App\Models\Question;
-use App\Models\Exam;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class ResultController extends Controller
 {
-    /**
- * Return the student's own examination result.
- */
-public function studentResult($sessionId)
+    /*
+    |--------------------------------------------------------------------------
+    | FACULTY / ADMIN OWNERSHIP HELPERS
+    |--------------------------------------------------------------------------
+    */
+
+    private function findAccessibleExam(
+        $id,
+        array $with = []
+    ) {
+        $user = auth()->user();
+
+        if (!$user) {
+            return null;
+        }
+
+        $query = Exam::query();
+
+        if (!empty($with)) {
+            $query->with($with);
+        }
+
+        $query->where('id', $id);
+
+        /*
+         * Faculty:
+         * only exams they created.
+         *
+         * Admin:
+         * all exams.
+         */
+        if ($user->role !== 'admin') {
+            $query->where(
+                'created_by',
+                $user->id
+            );
+        }
+
+        return $query->first();
+    }
+
+
+    private function findAccessibleSession(
+        $sessionId,
+        array $with = []
+    ) {
+        $user = auth()->user();
+
+        if (!$user) {
+            return null;
+        }
+
+        $query = ExamSession::query();
+
+        if (!empty($with)) {
+            $query->with($with);
+        }
+
+        $query->where(
+            'id',
+            $sessionId
+        );
+
+        /*
+         * Faculty can only access sessions
+         * belonging to their own examinations.
+         */
+        if ($user->role !== 'admin') {
+            $query->whereHas(
+                'exam',
+                function ($examQuery) use ($user) {
+                    $examQuery->where(
+                        'created_by',
+                        $user->id
+                    );
+                }
+            );
+        }
+
+        return $query->first();
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | STUDENT RESULT
+    |--------------------------------------------------------------------------
+    |
+    | Student-facing.
+    | Do NOT apply faculty ownership here.
+    |
+    */
+
+    public function studentResult($sessionId)
     {
         $session = ExamSession::with([
             'exam',
@@ -22,452 +112,1279 @@ public function studentResult($sessionId)
         if (!$session) {
             return response()->json([
                 'status' => false,
-                'message' => 'Student result not found.',
+                'message' =>
+                    'Student result not found.',
             ], 404);
         }
 
-        if ($session->status !== 'submitted') {
+        if (
+            $session->status !==
+            'submitted'
+        ) {
             return response()->json([
                 'status' => false,
-                'message' => 'The examination has not been submitted yet.',
+                'message' =>
+                    'The examination has not been submitted yet.',
             ], 403);
         }
 
         if (!$session->exam) {
             return response()->json([
                 'status' => false,
-                'message' => 'The examination record is unavailable.',
+                'message' =>
+                    'The examination record is unavailable.',
             ], 404);
         }
 
-        $totalPoints = (int) Question::where(
-            'exam_id',
-            $session->exam_id
-        )->sum('points');
+        $totalPoints =
+            (int) Question::where(
+                'exam_id',
+                $session->exam_id
+            )->sum('points');
 
-        $totalQuestions = Question::where(
-            'exam_id',
-            $session->exam_id
-        )->count();
+        $totalQuestions =
+            Question::where(
+                'exam_id',
+                $session->exam_id
+            )->count();
 
-        $correctAnswers = $session->answers
-            ->where('is_correct', true)
-            ->count();
+        $correctAnswers =
+            $session
+                ->answers
+                ->where(
+                    'is_correct',
+                    true
+                )
+                ->count();
 
         $wrongAnswers = max(
-            $totalQuestions - $correctAnswers,
+            $totalQuestions -
+            $correctAnswers,
             0
         );
 
-        $percentage = (float) $session->percentage;
+        $percentage =
+            (float)
+            $session->percentage;
 
         if ($totalPoints > 0) {
             $percentage = round(
-                ((int) $session->score / $totalPoints) * 100,
+                (
+                    (int) $session->score
+                    /
+                    $totalPoints
+                ) * 100,
                 2
             );
         }
 
-        $passing = (float) (
-            $session->exam->passing ?? 75
-        );
+        $passing =
+            (float) (
+                $session
+                    ->exam
+                    ->passing
+                ?? 75
+            );
 
-        $ongoingStudents = ExamSession::where(
-            'exam_id',
-            $session->exam_id
-        )
-            ->where('status', 'ongoing')
+        $ongoingStudents =
+            ExamSession::where(
+                'exam_id',
+                $session->exam_id
+            )
+            ->where(
+                'status',
+                'ongoing'
+            )
             ->count();
 
         $leaderboardAvailable =
-            strtolower((string) $session->exam->status) === 'finished'
-            || $ongoingStudents === 0;
+            strtolower(
+                (string)
+                $session->exam->status
+            ) === 'finished'
+            ||
+            $ongoingStudents === 0;
 
         $rank = null;
 
         if ($leaderboardAvailable) {
-            $rank = ExamSession::where(
-                'exam_id',
-                $session->exam_id
-            )
-                ->where('status', 'submitted')
-                ->where(function ($query) use ($session) {
-                    $query
-                        ->where(
-                            'percentage',
-                            '>',
-                            $session->percentage
-                        )
-                        ->orWhere(function ($samePercentage) use ($session) {
-                            $samePercentage
-                                ->where(
-                                    'percentage',
-                                    $session->percentage
-                                )
-                                ->where(
-                                    'score',
-                                    '>',
-                                    $session->score
-                                );
-                        })
-                        ->orWhere(function ($sameScore) use ($session) {
-                            $sameScore
-                                ->where(
-                                    'percentage',
-                                    $session->percentage
-                                )
-                                ->where(
-                                    'score',
-                                    $session->score
-                                )
-                                ->where(
-                                    'time_spent',
-                                    '<',
-                                    $session->time_spent
-                                );
-                        });
-                })
+
+            $rank =
+                ExamSession::where(
+                    'exam_id',
+                    $session->exam_id
+                )
+                ->where(
+                    'status',
+                    'submitted'
+                )
+                ->where(
+                    function ($query) use (
+                        $session
+                    ) {
+
+                        $query
+                            ->where(
+                                'percentage',
+                                '>',
+                                $session->percentage
+                            )
+
+                            ->orWhere(
+                                function (
+                                    $samePercentage
+                                ) use ($session) {
+
+                                    $samePercentage
+                                        ->where(
+                                            'percentage',
+                                            $session->percentage
+                                        )
+                                        ->where(
+                                            'score',
+                                            '>',
+                                            $session->score
+                                        );
+                                }
+                            )
+
+                            ->orWhere(
+                                function (
+                                    $sameScore
+                                ) use ($session) {
+
+                                    $sameScore
+                                        ->where(
+                                            'percentage',
+                                            $session->percentage
+                                        )
+                                        ->where(
+                                            'score',
+                                            $session->score
+                                        )
+                                        ->where(
+                                            'time_spent',
+                                            '<',
+                                            $session->time_spent
+                                        );
+                                }
+                            );
+                    }
+                )
                 ->count() + 1;
         }
 
         return response()->json([
             'status' => true,
+
             'data' => [
-                'session_id' => $session->id,
-                'exam_id' => $session->exam_id,
-                'student_name' => $session->student_name,
-                'exam_title' => $session->exam->title ?? 'Examination',
-                'course' => $session->exam->course ?? 'No Course',
-                'score' => (int) $session->score,
-                'total_points' => $totalPoints,
-                'percentage' => $percentage,
-                'passing' => $passing,
-                'correct_answers' => $correctAnswers,
-                'wrong_answers' => $wrongAnswers,
-                'total_questions' => $totalQuestions,
-                'time_spent' => (int) $session->time_spent,
-                'rank' => $rank,
-                'leaderboard_available' => $leaderboardAvailable,
+                'session_id' =>
+                    $session->id,
+
+                'exam_id' =>
+                    $session->exam_id,
+
+                'student_name' =>
+                    $session->student_name,
+
+                'exam_title' =>
+                    $session->exam->title
+                    ?? 'Examination',
+
+                'grade' =>
+                    $session->exam->grade
+                    ?? null,
+
+                'section' =>
+                    $session->exam->section
+                    ?? null,
+
+                'subject' =>
+                    $session->exam->subject
+                    ?? null,
+
+                'score' =>
+                    (int) $session->score,
+
+                'total_points' =>
+                    $totalPoints,
+
+                'percentage' =>
+                    $percentage,
+
+                'passing' =>
+                    $passing,
+
+                'correct_answers' =>
+                    $correctAnswers,
+
+                'wrong_answers' =>
+                    $wrongAnswers,
+
+                'total_questions' =>
+                    $totalQuestions,
+
+                'time_spent' =>
+                    (int)
+                    $session->time_spent,
+
+                'rank' =>
+                    $rank,
+
+                'leaderboard_available' =>
+                    $leaderboardAvailable,
+
                 'result_status' =>
                     $percentage >= $passing
                         ? 'Passed'
                         : 'Failed',
-                'submitted_at' => $session->submitted_at,
+
+                'submitted_at' =>
+                    $session->submitted_at,
             ],
         ]);
     }
 
 
-/**
- * Return the Top 5 students with their visible scores.
- */
-public function studentLeaderboard($examId)
-    {
-        $exam = Exam::with('questions')->find($examId);
+    /*
+    |--------------------------------------------------------------------------
+    | STUDENT LEADERBOARD
+    |--------------------------------------------------------------------------
+    |
+    | Student-facing.
+    |
+    */
+
+    public function studentLeaderboard(
+        $examId
+    ) {
+        $exam =
+            Exam::with('questions')
+                ->find($examId);
 
         if (!$exam) {
             return response()->json([
                 'status' => false,
-                'message' => 'Examination not found.',
+                'message' =>
+                    'Examination not found.',
             ], 404);
         }
 
-        $ongoingStudents = ExamSession::where(
-            'exam_id',
-            $exam->id
-        )
-            ->where('status', 'ongoing')
+        $ongoingStudents =
+            ExamSession::where(
+                'exam_id',
+                $exam->id
+            )
+            ->where(
+                'status',
+                'ongoing'
+            )
             ->count();
 
         $leaderboardAvailable =
-            strtolower((string) $exam->status) === 'finished'
-            || $ongoingStudents === 0;
+            strtolower(
+                (string)
+                $exam->status
+            ) === 'finished'
+            ||
+            $ongoingStudents === 0;
 
         if (!$leaderboardAvailable) {
             return response()->json([
                 'status' => true,
-                'leaderboard_available' => false,
+
+                'leaderboard_available' =>
+                    false,
+
                 'message' =>
                     'The Top 5 ranking will be available after the examination ends.',
-                'data' => [],
+
+                'data' =>
+                    [],
             ]);
         }
 
-        $totalPoints = (int) $exam->questions->sum('points');
-        $passing = (float) ($exam->passing ?? 75);
+        $totalPoints =
+            (int)
+            $exam
+                ->questions
+                ->sum('points');
 
-        $sessions = ExamSession::where(
-            'exam_id',
-            $exam->id
-        )
-            ->where('status', 'submitted')
-            ->orderByDesc('percentage')
-            ->orderByDesc('score')
-            ->orderBy('time_spent')
-            ->orderBy('submitted_at')
+        $passing =
+            (float) (
+                $exam->passing
+                ?? 75
+            );
+
+        $sessions =
+            ExamSession::where(
+                'exam_id',
+                $exam->id
+            )
+            ->where(
+                'status',
+                'submitted'
+            )
+            ->orderByDesc(
+                'percentage'
+            )
+            ->orderByDesc(
+                'score'
+            )
+            ->orderBy(
+                'time_spent'
+            )
+            ->orderBy(
+                'submitted_at'
+            )
             ->limit(5)
             ->get();
 
-        $leaderboard = $sessions
-            ->values()
-            ->map(function ($session, $index) use (
-                $totalPoints,
-                $passing
-            ) {
-                $percentage = (float) $session->percentage;
+        $leaderboard =
+            $sessions
+                ->values()
+                ->map(
+                    function (
+                        $session,
+                        $index
+                    ) use (
+                        $totalPoints,
+                        $passing
+                    ) {
 
-                if ($totalPoints > 0) {
-                    $percentage = round(
-                        ((int) $session->score / $totalPoints) * 100,
-                        2
-                    );
-                }
+                        $percentage =
+                            (float)
+                            $session
+                                ->percentage;
 
-                return [
-                    'rank' => $index + 1,
-                    'session_id' => $session->id,
-                    'student_name' => $session->student_name,
-                    'score' => (int) $session->score,
-                    'total_points' => $totalPoints,
-                    'percentage' => $percentage,
-                    'time_spent' => (int) $session->time_spent,
-                    'result_status' =>
-                        $percentage >= $passing
-                            ? 'Passed'
-                            : 'Failed',
-                ];
-            });
+                        if (
+                            $totalPoints > 0
+                        ) {
+                            $percentage =
+                                round(
+                                    (
+                                        (int)
+                                        $session
+                                            ->score
+                                        /
+                                        $totalPoints
+                                    ) * 100,
+                                    2
+                                );
+                        }
+
+                        return [
+                            'rank' =>
+                                $index + 1,
+
+                            'session_id' =>
+                                $session->id,
+
+                            'student_name' =>
+                                $session
+                                    ->student_name,
+
+                            'score' =>
+                                (int)
+                                $session->score,
+
+                            'total_points' =>
+                                $totalPoints,
+
+                            'percentage' =>
+                                $percentage,
+
+                            'time_spent' =>
+                                (int)
+                                $session
+                                    ->time_spent,
+
+                            'result_status' =>
+                                $percentage
+                                >=
+                                $passing
+                                    ? 'Passed'
+                                    : 'Failed',
+                        ];
+                    }
+                );
 
         return response()->json([
             'status' => true,
-            'leaderboard_available' => true,
-            'data' => $leaderboard,
+
+            'leaderboard_available' =>
+                true,
+
+            'data' =>
+                $leaderboard,
         ]);
     }
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | STUDENT HISTORY / ALL FACULTY RESULTS
+    |--------------------------------------------------------------------------
+    */
+
     public function index()
-{
-    $results = ExamSession::with([
-        'exam',
-        'answers.question'
-    ])
-    ->latest()
-    ->get();
-
-    return response()->json([
-        'status' => true,
-        'data' => $results
-    ]);
-}
-
-    /**
-     * Results of a specific exam
-     */
-    public function examResults($id)
     {
-        $sessions = ExamSession::with([
-            'exam',
-            'answers.question'
-        ])
-        ->where('exam_id', $id)
-        ->where('status', 'submitted')
-        ->latest()
-        ->get();
+        $user = auth()->user();
 
-        $exam = Exam::find($id);
-
-        if (!$exam) {
+        if (!$user) {
             return response()->json([
                 'status' => false,
-                'message' => 'Examination not found.',
-            ], 404);
+                'message' =>
+                    'Unauthenticated.'
+            ], 401);
         }
 
-        $results = $sessions->map(function ($session) {
+        $query =
+            ExamSession::with([
+                'exam',
+                'answers.question'
+            ]);
 
-            $totalQuestions = Question::where(
-                'exam_id',
-                $session->exam_id
-            )->count();
+        /*
+         * Faculty only sees history
+         * from their own examinations.
+         */
+        if ($user->role !== 'admin') {
 
-            $correct = $session->answers
-                ->where('is_correct', true)
-                ->count();
+            $query->whereHas(
+                'exam',
+                function (
+                    $examQuery
+                ) use ($user) {
 
-            $wrong = max(
-                $totalQuestions - $correct,
-                0
+                    $examQuery->where(
+                        'created_by',
+                        $user->id
+                    );
+                }
             );
+        }
 
-            $percentage = $session->percentage;
-
-            if ($percentage <= 0 && $totalQuestions > 0) {
-                $percentage = round(
-                    ($correct / $totalQuestions) * 100,
-                    2
-                );
-            }
-
-            return [
-                'id' => $session->id,
-                'student_name' => $session->student_name,
-                'score' => $session->score,
-                'percentage' => $percentage,
-                'correct' => $correct,
-                'wrong' => $wrong,
-                'time_spent' => $session->time_spent,
-                'submitted_at' => $session->submitted_at
-            ];
-        });
+        $results =
+            $query
+                ->latest()
+                ->get();
 
         return response()->json([
             'status' => true,
-          'exam' => [
-    'id' => $exam->id,
-    'title' => $exam->title,
-    'passing' => $exam->passing,
-    'questions_count' => Question::where('exam_id', $exam->id)->count(),
-],
             'data' => $results
         ]);
     }
 
-    /**
-     * View Single Result
-     */
-    public function show($session_id)
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESULTS OF A SPECIFIC EXAM
+    |--------------------------------------------------------------------------
+    */
+
+    public function examResults($id)
     {
-        $session = ExamSession::with([
-            'exam',
-            'answers.question'
-        ])->find($session_id);
+        /*
+         * Ownership check first.
+         */
+        $exam =
+            $this->findAccessibleExam(
+                $id
+            );
 
-        if (!$session) {
-
+        if (!$exam) {
             return response()->json([
                 'status' => false,
-                'message' => 'Result not found'
+                'message' =>
+                    'Examination not found or access denied.',
             ], 404);
         }
 
-        $totalQuestions = Question::where(
-            'exam_id',
-            $session->exam_id
-        )->count();
+        $sessions =
+            ExamSession::with([
+                'exam',
+                'answers.question'
+            ])
+            ->where(
+                'exam_id',
+                $exam->id
+            )
+            ->where(
+                'status',
+                'submitted'
+            )
+            ->latest()
+            ->get();
 
-        $correct = $session->answers
-            ->where('is_correct', true)
-            ->count();
+        $results =
+            $sessions->map(
+                function ($session) {
 
-        $wrong = max(
-            $totalQuestions - $correct,
-            0
-        );
+                    $totalQuestions =
+                        Question::where(
+                            'exam_id',
+                            $session->exam_id
+                        )
+                        ->count();
 
-        $percentage = $session->percentage;
+                    $correct =
+                        $session
+                            ->answers
+                            ->where(
+                                'is_correct',
+                                true
+                            )
+                            ->count();
 
-        if ($percentage <= 0 && $totalQuestions > 0) {
+                    $wrong =
+                        max(
+                            $totalQuestions
+                            -
+                            $correct,
+                            0
+                        );
 
-            $percentage = round(
-                ($correct / $totalQuestions) * 100,
-                2
+                    $percentage =
+                        (float)
+                        $session
+                            ->percentage;
+
+                    if (
+                        $percentage <= 0
+                        &&
+                        $totalQuestions > 0
+                    ) {
+
+                        $percentage =
+                            round(
+                                (
+                                    $correct
+                                    /
+                                    $totalQuestions
+                                ) * 100,
+                                2
+                            );
+                    }
+
+                    return [
+                        'id' =>
+                            $session->id,
+
+                        'student_name' =>
+                            $session
+                                ->student_name,
+
+                        'score' =>
+                            $session->score,
+
+                        'percentage' =>
+                            $percentage,
+
+                        'correct' =>
+                            $correct,
+
+                        'wrong' =>
+                            $wrong,
+
+                        'time_spent' =>
+                            $session
+                                ->time_spent,
+
+                        'submitted_at' =>
+                            $session
+                                ->submitted_at,
+                    ];
+                }
             );
-        }
-
-        $passingScore = $session->exam->passing ?? 75;
-
-        $status = $percentage >= $passingScore
-            ? 'Passed'
-            : 'Failed';
 
         return response()->json([
             'status' => true,
-            'student_name' => $session->student_name,
-            'exam' => $session->exam,
-            'score' => $session->score,
-            'correct' => $correct,
-            'wrong' => $wrong,
-            'total_questions' => $totalQuestions,
-            'percentage' => $percentage,
-            'result_status' => $status,
-            'answers' => $session->answers
+
+            'exam' => [
+                'id' =>
+                    $exam->id,
+
+                'title' =>
+                    $exam->title,
+
+                'grade' =>
+                    $exam->grade,
+
+                'section' =>
+                    $exam->section,
+
+                'subject' =>
+                    $exam->subject,
+
+                'passing' =>
+                    $exam->passing,
+
+                'questions_count' =>
+                    Question::where(
+                        'exam_id',
+                        $exam->id
+                    )
+                    ->count(),
+            ],
+
+            'data' =>
+                $results
         ]);
     }
 
-    public function itemAnalysis($id)
-{
-    $questions = Question::with([
-        'options',
-        'answers'
-    ])
-    ->where('exam_id', $id)
-    ->orderBy('question_order')
-    ->get();
 
-    $totalStudents = ExamSession::where('exam_id', $id)
-        ->where('status', 'submitted')
-        ->count();
+    /*
+    |--------------------------------------------------------------------------
+    | VIEW SINGLE FACULTY RESULT
+    |--------------------------------------------------------------------------
+    */
 
-    $items = $questions->map(function ($question, $index) use ($totalStudents) {
+    public function show($session_id)
+    {
+        $session =
+            $this->findAccessibleSession(
+                $session_id,
+                [
+                    'exam',
+                    'answers.question'
+                ]
+            );
 
-        $answers = $question->answers;
+        if (!$session) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Result not found or access denied.'
+            ], 404);
+        }
 
-        $correct = $answers
-            ->where('is_correct', true)
+        $totalQuestions =
+            Question::where(
+                'exam_id',
+                $session->exam_id
+            )
             ->count();
 
-        $wrong = max(
-            $totalStudents - $correct,
-            0
-        );
+        $correct =
+            $session
+                ->answers
+                ->where(
+                    'is_correct',
+                    true
+                )
+                ->count();
 
-        $successRate = $totalStudents > 0
-            ? round(
-                ($correct / $totalStudents) * 100
+        $wrong =
+            max(
+                $totalQuestions
+                -
+                $correct,
+                0
+            );
+
+        $percentage =
+            (float)
+            $session->percentage;
+
+        if (
+            $percentage <= 0
+            &&
+            $totalQuestions > 0
+        ) {
+
+            $percentage =
+                round(
+                    (
+                        $correct
+                        /
+                        $totalQuestions
+                    ) * 100,
+                    2
+                );
+        }
+
+        $passingScore =
+            $session
+                ->exam
+                ->passing
+            ?? 75;
+
+        $status =
+            $percentage
+            >=
+            $passingScore
+                ? 'Passed'
+                : 'Failed';
+
+        return response()->json([
+            'status' => true,
+
+            'student_name' =>
+                $session->student_name,
+
+            'exam' =>
+                $session->exam,
+
+            'score' =>
+                $session->score,
+
+            'correct' =>
+                $correct,
+
+            'wrong' =>
+                $wrong,
+
+            'total_questions' =>
+                $totalQuestions,
+
+            'percentage' =>
+                $percentage,
+
+            'result_status' =>
+                $status,
+
+            'answers' =>
+                $session->answers
+        ]);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | ITEM ANALYSIS API
+    |--------------------------------------------------------------------------
+    */
+
+    public function itemAnalysis($id)
+    {
+        $data =
+            $this
+                ->buildItemAnalysisData(
+                    $id
+                );
+
+        if (!$data) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Examination not found or access denied.'
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => true,
+
+            'data' =>
+                $data['items'],
+
+            'summary' =>
+                $data['summary'],
+
+            'statistics' =>
+                $data['statistics'],
+
+            'exam' =>
+                $data['exam']
+        ]);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | BUILD ITEM ANALYSIS DATA
+    |--------------------------------------------------------------------------
+    */
+
+    private function buildItemAnalysisData(
+        $id
+    ) {
+        /*
+         * IMPORTANT:
+         * Ownership protected.
+         */
+        $exam =
+            $this->findAccessibleExam(
+                $id
+            );
+
+        if (!$exam) {
+            return null;
+        }
+
+        $questions =
+            Question::with([
+                'options',
+                'answers'
+            ])
+            ->where(
+                'exam_id',
+                $exam->id
             )
-            : 0;
-
-        $wrongAnswers = $answers
-            ->where('is_correct', false)
-            ->groupBy('answer')
-            ->map(
-                fn ($group) => $group->count()
+            ->orderBy(
+                'question_order'
             )
-            ->sortDesc();
+            ->get();
 
-        $commonWrongAnswer =
-            $wrongAnswers->keys()->first()
-            ?? 'None';
+        $sessions =
+            ExamSession::where(
+                'exam_id',
+                $exam->id
+            )
+            ->where(
+                'status',
+                'submitted'
+            )
+            ->get();
+
+        $totalStudents =
+            $sessions->count();
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | ITEM ANALYSIS
+        |--------------------------------------------------------------------------
+        */
+
+        $items =
+            $questions->map(
+                function (
+                    $question,
+                    $index
+                ) use (
+                    $totalStudents
+                ) {
+
+                    $answers =
+                        $question
+                            ->answers;
+
+                    $correct =
+                        $answers
+                            ->where(
+                                'is_correct',
+                                true
+                            )
+                            ->count();
+
+                    $wrong =
+                        max(
+                            $totalStudents
+                            -
+                            $correct,
+                            0
+                        );
+
+                    $successRate =
+                        $totalStudents > 0
+
+                            ? round(
+                                (
+                                    $correct
+                                    /
+                                    $totalStudents
+                                ) * 100,
+                                2
+                            )
+
+                            : 0;
+
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | MASTERY CLASSIFICATION
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if (
+                        $successRate >= 96
+                    ) {
+
+                        $interpretation =
+                            'Mastered';
+
+                        $remarks =
+                            'Retain or Revise';
+
+                    } elseif (
+                        $successRate >= 86
+                    ) {
+
+                        $interpretation =
+                            'Approximating Mastery';
+
+                        $remarks =
+                            'Retain';
+
+                    } elseif (
+                        $successRate >= 66
+                    ) {
+
+                        $interpretation =
+                            'Moving Towards Mastery';
+
+                        $remarks =
+                            'Retain';
+
+                    } elseif (
+                        $successRate >= 35
+                    ) {
+
+                        $interpretation =
+                            'Average Mastery';
+
+                        $remarks =
+                            'Revise';
+
+                    } else {
+
+                        $interpretation =
+                            'Low Mastery';
+
+                        $remarks =
+                            'Reject';
+                    }
+
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | COMMON WRONG ANSWER
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $wrongAnswers =
+                        $answers
+                            ->where(
+                                'is_correct',
+                                false
+                            )
+                            ->groupBy(
+                                'answer'
+                            )
+                            ->map(
+                                fn ($group) =>
+                                    $group->count()
+                            )
+                            ->sortDesc();
+
+                    $commonWrongAnswer =
+                        $wrongAnswers
+                            ->keys()
+                            ->first()
+                        ?? 'None';
+
+
+                    return [
+                        'id' =>
+                            $question->id,
+
+                        'number' =>
+                            $index + 1,
+
+                        'question' =>
+                            $question
+                                ->question,
+
+                        'competency' =>
+                            $question
+                                ->competency
+                            ?:
+                            'Unassigned Competency',
+
+                        'type' =>
+                            $question
+                                ->question_type,
+
+                        'successRate' =>
+                            $successRate,
+
+                        'correct' =>
+                            $correct,
+
+                        'wrong' =>
+                            $wrong,
+
+                        'total' =>
+                            $totalStudents,
+
+                        'discrimination' =>
+                            'N/A',
+
+                        'commonWrongAnswer' =>
+                            $commonWrongAnswer,
+
+                        'interpretation' =>
+                            $interpretation,
+
+                        'remarks' =>
+                            $remarks,
+                    ];
+                }
+            );
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | TOTAL ITEMS
+        |--------------------------------------------------------------------------
+        */
+
+        $totalItems =
+            $questions->count();
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | MEAN
+        |--------------------------------------------------------------------------
+        */
+
+        $mean =
+            $totalStudents > 0
+
+                ? round(
+                    (float)
+                    $sessions
+                        ->avg('score'),
+                    2
+                )
+
+                : 0;
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | MEAN PERCENTAGE SCORE
+        |--------------------------------------------------------------------------
+        */
+
+        $mps =
+            $totalItems > 0
+
+                ? round(
+                    (
+                        $mean
+                        /
+                        $totalItems
+                    ) * 100,
+                    2
+                )
+
+                : 0;
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | STANDARD DEVIATION
+        |--------------------------------------------------------------------------
+        */
+
+        $sd = 0;
+
+        if (
+            $totalStudents > 1
+        ) {
+
+            $scores =
+                $sessions
+                    ->pluck(
+                        'score'
+                    )
+                    ->map(
+                        fn ($score) =>
+                            (float)
+                            $score
+                    );
+
+            $scoreMean =
+                $scores->avg();
+
+            $variance =
+                $scores
+                    ->map(
+                        function (
+                            $score
+                        ) use (
+                            $scoreMean
+                        ) {
+
+                            return pow(
+                                $score
+                                -
+                                $scoreMean,
+                                2
+                            );
+                        }
+                    )
+                    ->sum()
+                    /
+                    $scores->count();
+
+            $sd =
+                round(
+                    sqrt(
+                        $variance
+                    ),
+                    4
+                );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | MASTERY SUMMARY
+        |--------------------------------------------------------------------------
+        */
+
+        $masteryLevels = [
+            'Mastered',
+            'Approximating Mastery',
+            'Moving Towards Mastery',
+            'Average Mastery',
+            'Low Mastery'
+        ];
+
+        $summary = [];
+
+        foreach (
+            $masteryLevels
+            as $level
+        ) {
+
+            $matching =
+                $items->filter(
+                    fn ($item) =>
+                        $item[
+                            'interpretation'
+                        ]
+                        ===
+                        $level
+                );
+
+            $summary[] = [
+                'level' =>
+                    $level,
+
+                'items' =>
+                    $matching
+                        ->pluck(
+                            'number'
+                        )
+                        ->implode(
+                            ', '
+                        )
+                    ?: '—',
+
+                'count' =>
+                    $matching
+                        ->count()
+            ];
+        }
+
 
         return [
-            'id' => $question->id,
+            'exam' =>
+                $exam,
 
-            'number' => $index + 1,
+            'items' =>
+                $items,
 
-            'question' => $question->question,
+            'summary' =>
+                $summary,
 
-            // ADD THIS
-            'competency' => $question->competency,
+            'statistics' => [
+                'total_items' =>
+                    $totalItems,
 
-            'type' => $question->question_type,
+                'total_examinees' =>
+                    $totalStudents,
 
-            'successRate' => $successRate,
+                'mean' =>
+                    number_format(
+                        $mean,
+                        2
+                    ),
 
-            'correct' => $correct,
+                'mps' =>
+                    number_format(
+                        $mps,
+                        2
+                    ),
 
-            'wrong' => $wrong,
+                'sd' =>
+                    number_format(
+                        $sd,
+                        4
+                    ),
 
-            'total' => $totalStudents,
-
-            'discrimination' => 'N/A',
-
-            'commonWrongAnswer' => $commonWrongAnswer
+                /*
+                 * Keep blank until
+                 * agency PL formula
+                 * is confirmed.
+                 */
+                'pl' =>
+                    null
+            ]
         ];
-    });
+    }
 
-    return response()->json([
-        'status' => true,
-        'data' => $items
-    ]);
-}
+
+    /*
+    |--------------------------------------------------------------------------
+    | EXPORT ITEM ANALYSIS PDF
+    |--------------------------------------------------------------------------
+    */
+
+    public function exportItemAnalysisPdf(
+        $id
+    ) {
+        /*
+         * buildItemAnalysisData()
+         * already checks ownership.
+         */
+        $data =
+            $this
+                ->buildItemAnalysisData(
+                    $id
+                );
+
+        if (!$data) {
+            abort(
+                404,
+                'Examination not found or access denied.'
+            );
+        }
+
+        $pdf =
+            Pdf::loadView(
+                'reports.item-analysis-pdf',
+                $data
+            );
+
+        $pdf->setPaper(
+            'A4',
+            'landscape'
+        );
+
+        $safeTitle =
+            preg_replace(
+                '/[^A-Za-z0-9\-_ ]/',
+                '',
+                $data[
+                    'exam'
+                ]->title
+            );
+
+        if (!$safeTitle) {
+            $safeTitle =
+                'Exam';
+        }
+
+        return $pdf->download(
+            $safeTitle
+            .
+            '-Item-Analysis.pdf'
+        );
+    }
 }

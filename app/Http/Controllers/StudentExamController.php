@@ -157,19 +157,52 @@ class StudentExamController extends Controller
     /**
      * Faculty lobby list.
      */
-    public function lobbyStudents($id)
-    {
-        $sessions = ExamSession::where('exam_id', $id)
-            ->where('status', 'ongoing')
-            ->latest()
-            ->get();
+public function lobbyStudents($id)
+{
+    $user = auth()->user();
 
+    if (!$user) {
         return response()->json([
-            'status' => true,
-            'data' => $sessions,
-        ]);
+            'status' => false,
+            'message' => 'Unauthenticated.'
+        ], 401);
     }
 
+    $examQuery = Exam::where('id', $id);
+
+    if ($user->role !== 'admin') {
+        $examQuery->where(
+            'created_by',
+            $user->id
+        );
+    }
+
+    $exam = $examQuery->first();
+
+    if (!$exam) {
+        return response()->json([
+            'status' => false,
+            'message' =>
+                'Examination not found or access denied.'
+        ], 404);
+    }
+
+    $sessions = ExamSession::where(
+        'exam_id',
+        $exam->id
+    )
+        ->where(
+            'status',
+            'ongoing'
+        )
+        ->latest()
+        ->get();
+
+    return response()->json([
+        'status' => true,
+        'data' => $sessions,
+    ]);
+}
     /**
      * Get exam questions
      */
