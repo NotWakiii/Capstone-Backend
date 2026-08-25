@@ -897,438 +897,766 @@ class ResultController extends Controller
     */
 
     private function buildItemAnalysisData(
-        $id
-    ) {
-        /*
-         * IMPORTANT:
-         * Ownership protected.
-         */
-        $exam =
-            $this->findAccessibleExam(
-                $id
-            );
+    $id
+) {
+    /*
+    |--------------------------------------------------------------------------
+    | FIND EXAM
+    |--------------------------------------------------------------------------
+    */
 
-        if (!$exam) {
-            return null;
-        }
+    $exam =
+        $this->findAccessibleExam(
+            $id
+        );
 
-        $questions =
-            Question::with([
-                'options',
-                'answers'
-            ])
-            ->where(
-                'exam_id',
-                $exam->id
+    if (!$exam) {
+        return null;
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | GET QUESTIONS
+    |--------------------------------------------------------------------------
+    */
+
+    $questions =
+        Question::with([
+            'options',
+            'answers'
+        ])
+        ->where(
+            'exam_id',
+            $exam->id
+        )
+        ->orderBy(
+            'question_order'
+        )
+        ->get();
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | GET SUBMITTED EXAM SESSIONS
+    |--------------------------------------------------------------------------
+    */
+
+    $sessions =
+        ExamSession::where(
+            'exam_id',
+            $exam->id
+        )
+        ->where(
+            'status',
+            'submitted'
+        )
+        ->get();
+
+
+    $totalStudents =
+        $sessions->count();
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | PREPARE UPPER AND LOWER GROUPS
+    |--------------------------------------------------------------------------
+    |
+    | Used for the Discrimination Index.
+    |
+    | Students are ranked according to their
+    | examination score.
+    |
+    | Upper 27% = high-performing group
+    | Lower 27% = low-performing group
+    |
+    */
+
+    $rankedSessions =
+        $sessions
+            ->sortByDesc(
+                'score'
             )
-            ->orderBy(
-                'question_order'
-            )
-            ->get();
-
-        $sessions =
-            ExamSession::where(
-                'exam_id',
-                $exam->id
-            )
-            ->where(
-                'status',
-                'submitted'
-            )
-            ->get();
-
-        $totalStudents =
-            $sessions->count();
+            ->values();
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | ITEM ANALYSIS
-        |--------------------------------------------------------------------------
-        */
+    $groupSize = 0;
 
-        $items =
-            $questions->map(
-                function (
-                    $question,
-                    $index
-                ) use (
+
+    if ($totalStudents >= 2) {
+
+        $groupSize =
+            max(
+                1,
+                (int) round(
                     $totalStudents
-                ) {
+                    *
+                    0.27
+                )
+            );
+    }
 
-                    $answers =
-                        $question
-                            ->answers;
 
-                    $correct =
+    $upperGroupIds =
+        $groupSize > 0
+
+            ? $rankedSessions
+                ->take(
+                    $groupSize
+                )
+                ->pluck(
+                    'id'
+                )
+                ->values()
+
+            : collect();
+
+
+    $lowerGroupIds =
+        $groupSize > 0
+
+            ? $rankedSessions
+                ->reverse()
+                ->take(
+                    $groupSize
+                )
+                ->pluck(
+                    'id'
+                )
+                ->values()
+
+            : collect();
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | ITEM ANALYSIS
+    |--------------------------------------------------------------------------
+    */
+
+    $items =
+        $questions->map(
+            function (
+                $question,
+                $index
+            ) use (
+                $totalStudents,
+                $upperGroupIds,
+                $lowerGroupIds,
+                $groupSize
+            ) {
+
+                /*
+                |--------------------------------------------------------------------------
+                | ANSWERS FOR CURRENT QUESTION
+                |--------------------------------------------------------------------------
+                */
+
+                $answers =
+                    $question
+                        ->answers;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | CORRECT RESPONSES
+                |--------------------------------------------------------------------------
+                */
+
+                $correct =
+                    $answers
+                        ->where(
+                            'is_correct',
+                            true
+                        )
+                        ->count();
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | WRONG RESPONSES
+                |--------------------------------------------------------------------------
+                */
+
+                $wrong =
+                    max(
+                        $totalStudents
+                        -
+                        $correct,
+                        0
+                    );
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | SUCCESS RATE / ITEM PERCENTAGE
+                |--------------------------------------------------------------------------
+                |
+                | Formula:
+                |
+                | Correct Responses
+                | ----------------- × 100
+                | Total Examinees
+                |
+                */
+
+                $successRate =
+                    $totalStudents > 0
+
+                        ? round(
+                            (
+                                $correct
+                                /
+                                $totalStudents
+                            )
+                            *
+                            100,
+                            2
+                        )
+
+                        : 0;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | DISCRIMINATION INDEX
+                |--------------------------------------------------------------------------
+                |
+                | Formula:
+                |
+                | D = (RU - RL) / N
+                |
+                | RU = Correct responses from upper group
+                | RL = Correct responses from lower group
+                | N  = Number of examinees in one group
+                |
+                */
+
+                $discrimination =
+                    null;
+
+
+                if ($groupSize > 0) {
+
+                    $upperCorrect =
                         $answers
+                            ->whereIn(
+                                'exam_session_id',
+                                $upperGroupIds
+                            )
                             ->where(
                                 'is_correct',
                                 true
                             )
                             ->count();
 
-                    $wrong =
-                        max(
-                            $totalStudents
-                            -
-                            $correct,
-                            0
-                        );
 
-                    $successRate =
-                        $totalStudents > 0
-
-                            ? round(
-                                (
-                                    $correct
-                                    /
-                                    $totalStudents
-                                ) * 100,
-                                2
-                            )
-
-                            : 0;
-
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | MASTERY CLASSIFICATION
-                    |--------------------------------------------------------------------------
-                    */
-
-                    if (
-                        $successRate >= 96
-                    ) {
-
-                        $interpretation =
-                            'Mastered';
-
-                        $remarks =
-                            'Retain or Revise';
-
-                    } elseif (
-                        $successRate >= 86
-                    ) {
-
-                        $interpretation =
-                            'Approximating Mastery';
-
-                        $remarks =
-                            'Retain';
-
-                    } elseif (
-                        $successRate >= 66
-                    ) {
-
-                        $interpretation =
-                            'Moving Towards Mastery';
-
-                        $remarks =
-                            'Retain';
-
-                    } elseif (
-                        $successRate >= 35
-                    ) {
-
-                        $interpretation =
-                            'Average Mastery';
-
-                        $remarks =
-                            'Revise';
-
-                    } else {
-
-                        $interpretation =
-                            'Low Mastery';
-
-                        $remarks =
-                            'Reject';
-                    }
-
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | COMMON WRONG ANSWER
-                    |--------------------------------------------------------------------------
-                    */
-
-                    $wrongAnswers =
+                    $lowerCorrect =
                         $answers
+                            ->whereIn(
+                                'exam_session_id',
+                                $lowerGroupIds
+                            )
                             ->where(
                                 'is_correct',
-                                false
+                                true
                             )
-                            ->groupBy(
-                                'answer'
+                            ->count();
+
+
+                    $discrimination =
+                        round(
+                            (
+                                $upperCorrect
+                                -
+                                $lowerCorrect
                             )
-                            ->map(
-                                fn ($group) =>
-                                    $group->count()
-                            )
-                            ->sortDesc();
-
-                    $commonWrongAnswer =
-                        $wrongAnswers
-                            ->keys()
-                            ->first()
-                        ?? 'None';
-
-
-                    return [
-                        'id' =>
-                            $question->id,
-
-                        'number' =>
-                            $index + 1,
-
-                        'question' =>
-                            $question
-                                ->question,
-
-                        'competency' =>
-                            $question
-                                ->competency
-                            ?:
-                            'Unassigned Competency',
-
-                        'type' =>
-                            $question
-                                ->question_type,
-
-                        'successRate' =>
-                            $successRate,
-
-                        'correct' =>
-                            $correct,
-
-                        'wrong' =>
-                            $wrong,
-
-                        'total' =>
-                            $totalStudents,
-
-                        'discrimination' =>
-                            'N/A',
-
-                        'commonWrongAnswer' =>
-                            $commonWrongAnswer,
-
-                        'interpretation' =>
-                            $interpretation,
-
-                        'remarks' =>
-                            $remarks,
-                    ];
+                            /
+                            $groupSize,
+                            2
+                        );
                 }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | MASTERY CLASSIFICATION
+                |--------------------------------------------------------------------------
+                |
+                | Agency / School Classification
+                |
+                | 96–100 = Mastered
+                | 86–95  = Approximating Mastery
+                | 66–85  = Moving Towards Mastery
+                | 35–65  = Average Mastery
+                | 0–34   = Low Mastery
+                |
+                */
+
+                if (
+                    $successRate >= 96
+                ) {
+
+                    $interpretation =
+                        'Mastered';
+
+                    $remarks =
+                        'Retain or Revise';
+
+                } elseif (
+                    $successRate >= 86
+                ) {
+
+                    $interpretation =
+                        'Approximating Mastery';
+
+                    $remarks =
+                        'Retain';
+
+                } elseif (
+                    $successRate >= 66
+                ) {
+
+                    $interpretation =
+                        'Moving Towards Mastery';
+
+                    $remarks =
+                        'Retain';
+
+                } elseif (
+                    $successRate >= 35
+                ) {
+
+                    $interpretation =
+                        'Average Mastery';
+
+                    $remarks =
+                        'Revise';
+
+                } else {
+
+                    $interpretation =
+                        'Low Mastery';
+
+                    $remarks =
+                        'Reject';
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | COMMON WRONG ANSWER
+                |--------------------------------------------------------------------------
+                */
+
+                $wrongAnswers =
+                    $answers
+                        ->where(
+                            'is_correct',
+                            false
+                        )
+                        ->groupBy(
+                            'answer'
+                        )
+                        ->map(
+                            fn ($group) =>
+                                $group->count()
+                        )
+                        ->sortDesc();
+
+
+                $commonWrongAnswer =
+                    $wrongAnswers
+                        ->keys()
+                        ->first()
+                    ??
+                    'None';
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | RETURN ITEM
+                |--------------------------------------------------------------------------
+                */
+
+                return [
+
+                    'id' =>
+                        $question->id,
+
+                    'number' =>
+                        $index + 1,
+
+                    'question' =>
+                        $question
+                            ->question,
+
+                    'competency' =>
+                        $question
+                            ->competency
+                        ?:
+                        'Unassigned Competency',
+
+                    'type' =>
+                        $question
+                            ->question_type,
+
+                    'successRate' =>
+                        $successRate,
+
+                    'percentage' =>
+                        $successRate,
+
+                    'correct' =>
+                        $correct,
+
+                    'wrong' =>
+                        $wrong,
+
+                    'total' =>
+                        $totalStudents,
+
+                    'discrimination' =>
+                        $discrimination,
+
+                    'commonWrongAnswer' =>
+                        $commonWrongAnswer,
+
+                    'interpretation' =>
+                        $interpretation,
+
+                    'remarks' =>
+                        $remarks,
+
+                ];
+            }
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | TOTAL ITEMS
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    |
+    | This follows the SCHOOL FORMULA.
+    |
+    | We use the NUMBER OF TEST ITEMS,
+    | NOT total possible points.
+    |
+    */
+
+    $totalItems =
+        $questions->count();
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | MEAN
+    |--------------------------------------------------------------------------
+    |
+    | Formula:
+    |
+    | Sum of Student Scores
+    | ---------------------
+    | Number of Examinees
+    |
+    */
+
+    $mean =
+        $totalStudents > 0
+
+            ? round(
+                (float)
+                $sessions
+                    ->avg(
+                        'score'
+                    ),
+                2
+            )
+
+            : 0;
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | MEAN PERCENTAGE SCORE (MPS)
+    |--------------------------------------------------------------------------
+    |
+    | SCHOOL FORMULA:
+    |
+    |          Mean
+    | MPS = ----------- × 100
+    |       Total Items
+    |
+    | Example:
+    |
+    | Mean        = 13.32
+    | Total Items = 50
+    |
+    | MPS =
+    | (13.32 / 50) × 100
+    |
+    | MPS = 26.64%
+    |
+    | IMPORTANT:
+    | Do NOT substitute total possible points.
+    |
+    */
+
+    $mps =
+        $totalItems > 0
+
+            ? round(
+                (
+                    $mean
+                    /
+                    $totalItems
+                )
+                *
+                100,
+                2
+            )
+
+            : 0;
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | PERFORMANCE LEVEL (PL)
+    |--------------------------------------------------------------------------
+    |
+    | SCHOOL FORMULA:
+    |
+    |           MPS
+    | PL = 50 + ---
+    |            2
+    |
+    | Example:
+    |
+    | MPS = 26.64
+    |
+    | 26.64 / 2 = 13.32
+    |
+    | PL = 50 + 13.32
+    |
+    | PL = 63.32
+    |
+    */
+
+    $pl =
+        round(
+            50
+            +
+            (
+                $mps
+                /
+                2
+            ),
+            2
+        );
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | STANDARD DEVIATION
+    |--------------------------------------------------------------------------
+    */
+
+    $sd = 0;
+
+
+    if (
+        $totalStudents > 1
+    ) {
+
+        $scores =
+            $sessions
+                ->pluck(
+                    'score'
+                )
+                ->map(
+                    fn ($score) =>
+                        (float)
+                        $score
+                );
+
+
+        $scoreMean =
+            $scores->avg();
+
+
+        $variance =
+            $scores
+                ->map(
+                    function (
+                        $score
+                    ) use (
+                        $scoreMean
+                    ) {
+
+                        return pow(
+                            $score
+                            -
+                            $scoreMean,
+                            2
+                        );
+                    }
+                )
+                ->sum()
+            /
+            $scores->count();
+
+
+        $sd =
+            round(
+                sqrt(
+                    $variance
+                ),
+                4
+            );
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | MASTERY SUMMARY
+    |--------------------------------------------------------------------------
+    */
+
+    $masteryLevels = [
+
+        'Mastered',
+
+        'Approximating Mastery',
+
+        'Moving Towards Mastery',
+
+        'Average Mastery',
+
+        'Low Mastery'
+
+    ];
+
+
+    $summary = [];
+
+
+    foreach (
+        $masteryLevels
+        as $level
+    ) {
+
+        $matching =
+            $items->filter(
+                fn ($item) =>
+                    $item[
+                        'interpretation'
+                    ]
+                    ===
+                    $level
             );
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | TOTAL ITEMS
-        |--------------------------------------------------------------------------
-        */
+        $summary[] = [
 
-        $totalItems =
-            $questions->count();
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | MEAN
-        |--------------------------------------------------------------------------
-        */
-
-        $mean =
-            $totalStudents > 0
-
-                ? round(
-                    (float)
-                    $sessions
-                        ->avg('score'),
-                    2
-                )
-
-                : 0;
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | MEAN PERCENTAGE SCORE
-        |--------------------------------------------------------------------------
-        */
-
-        $mps =
-            $totalItems > 0
-
-                ? round(
-                    (
-                        $mean
-                        /
-                        $totalItems
-                    ) * 100,
-                    2
-                )
-
-                : 0;
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | STANDARD DEVIATION
-        |--------------------------------------------------------------------------
-        */
-
-        $sd = 0;
-
-        if (
-            $totalStudents > 1
-        ) {
-
-            $scores =
-                $sessions
-                    ->pluck(
-                        'score'
-                    )
-                    ->map(
-                        fn ($score) =>
-                            (float)
-                            $score
-                    );
-
-            $scoreMean =
-                $scores->avg();
-
-            $variance =
-                $scores
-                    ->map(
-                        function (
-                            $score
-                        ) use (
-                            $scoreMean
-                        ) {
-
-                            return pow(
-                                $score
-                                -
-                                $scoreMean,
-                                2
-                            );
-                        }
-                    )
-                    ->sum()
-                    /
-                    $scores->count();
-
-            $sd =
-                round(
-                    sqrt(
-                        $variance
-                    ),
-                    4
-                );
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | MASTERY SUMMARY
-        |--------------------------------------------------------------------------
-        */
-
-        $masteryLevels = [
-            'Mastered',
-            'Approximating Mastery',
-            'Moving Towards Mastery',
-            'Average Mastery',
-            'Low Mastery'
-        ];
-
-        $summary = [];
-
-        foreach (
-            $masteryLevels
-            as $level
-        ) {
-
-            $matching =
-                $items->filter(
-                    fn ($item) =>
-                        $item[
-                            'interpretation'
-                        ]
-                        ===
-                        $level
-                );
-
-            $summary[] = [
-                'level' =>
-                    $level,
-
-                'items' =>
-                    $matching
-                        ->pluck(
-                            'number'
-                        )
-                        ->implode(
-                            ', '
-                        )
-                    ?: '—',
-
-                'count' =>
-                    $matching
-                        ->count()
-            ];
-        }
-
-
-        return [
-            'exam' =>
-                $exam,
+            'level' =>
+                $level,
 
             'items' =>
-                $items,
+                $matching
+                    ->pluck(
+                        'number'
+                    )
+                    ->implode(
+                        ', '
+                    )
+                ?:
+                '—',
 
-            'summary' =>
-                $summary,
+            'count' =>
+                $matching
+                    ->count()
 
-            'statistics' => [
-                'total_items' =>
-                    $totalItems,
-
-                'total_examinees' =>
-                    $totalStudents,
-
-                'mean' =>
-                    number_format(
-                        $mean,
-                        2
-                    ),
-
-                'mps' =>
-                    number_format(
-                        $mps,
-                        2
-                    ),
-
-                'sd' =>
-                    number_format(
-                        $sd,
-                        4
-                    ),
-
-                /*
-                 * Keep blank until
-                 * agency PL formula
-                 * is confirmed.
-                 */
-                'pl' =>
-                    null
-            ]
         ];
     }
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | RETURN ITEM ANALYSIS DATA
+    |--------------------------------------------------------------------------
+    */
+
+    return [
+
+        'exam' =>
+            $exam,
+
+        'items' =>
+            $items,
+
+        'summary' =>
+            $summary,
+
+        'statistics' => [
+
+            'total_items' =>
+                $totalItems,
+
+            'total_examinees' =>
+                $totalStudents,
+
+            'mean' =>
+                number_format(
+                    $mean,
+                    2,
+                    '.',
+                    ''
+                ),
+
+            /*
+             * SCHOOL FORMULA:
+             *
+             * MPS =
+             * (Mean / Total Items) × 100
+             */
+            'mps' =>
+                number_format(
+                    $mps,
+                    2,
+                    '.',
+                    ''
+                ),
+
+            'sd' =>
+                number_format(
+                    $sd,
+                    4,
+                    '.',
+                    ''
+                ),
+
+            /*
+             * SCHOOL FORMULA:
+             *
+             * PL =
+             * 50 + (MPS / 2)
+             */
+            'pl' =>
+                number_format(
+                    $pl,
+                    2,
+                    '.',
+                    ''
+                ),
+
+        ]
+
+    ];
+}
 
     /*
     |--------------------------------------------------------------------------

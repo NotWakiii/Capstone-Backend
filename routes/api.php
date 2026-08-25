@@ -48,6 +48,13 @@ Route::post(
     '/join-exam',
     [StudentExamController::class, 'joinExam']
 );
+Route::post(
+    '/exam-students',
+    [
+        StudentExamController::class,
+        'examStudents'
+    ]
+);
 
 Route::get(
     '/student/exams/{id}/status',
@@ -332,3 +339,48 @@ Route::middleware([
     );
 
 });
+//class management routes
+use App\Http\Controllers\ClassManagementController;
+Route::middleware('auth:sanctum')
+    ->prefix('faculty')
+    ->group(function () {
+
+        Route::get(
+            '/classes',
+            [ClassManagementController::class, 'index']
+        );
+
+        Route::post(
+            '/classes',
+            [ClassManagementController::class, 'store']
+        );
+
+        Route::put(
+            '/classes/{id}',
+            [ClassManagementController::class, 'update']
+        );
+
+        Route::delete(
+            '/classes/{id}',
+            [ClassManagementController::class, 'destroy']
+        );
+
+
+        // STUDENTS
+
+        Route::post(
+            '/classes/{id}/students',
+            [ClassManagementController::class, 'addStudent']
+        );
+
+        Route::put(
+            '/classes/{classId}/students/{studentId}',
+            [ClassManagementController::class, 'updateStudent']
+        );
+
+        Route::delete(
+            '/classes/{classId}/students/{studentId}',
+            [ClassManagementController::class, 'removeStudent']
+        );
+
+    });

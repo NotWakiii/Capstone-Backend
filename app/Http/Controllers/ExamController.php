@@ -8,6 +8,7 @@ use App\Models\Exam;
 use App\Models\Question;
 use App\Models\QuestionOption;
 use App\Models\ExamSession;
+use App\Models\SchoolClass;
 
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -107,18 +108,15 @@ public function index()
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'title' =>
                 'required|string|max:255',
 
             'description' =>
                 'nullable|string',
 
-            'grade' =>
-                'required|string|max:50',
-
-            'section' =>
-                'required|string|max:100',
+            'class_id' =>
+                'required|integer|exists:school_classes,id',
 
             'subject' =>
                 'required|string|max:255',
@@ -150,6 +148,24 @@ public function index()
             'questions.*.time' =>
                 'nullable|integer|min:1',
         ]);
+$schoolClass = SchoolClass::where(
+    'id',
+    $validated['class_id']
+)
+    ->where(
+        'faculty_id',
+        $request->user()->id
+    )
+    ->firstOrFail();
+
+        if (!$schoolClass) {
+
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Selected class not found or access denied.'
+            ], 422);
+        }
 
         DB::beginTransaction();
 
@@ -159,17 +175,25 @@ public function index()
              * Create exam.
              */
             $exam = Exam::create([
+
                 'title' =>
                     $request->title,
 
                 'description' =>
                     $request->description,
 
+                'class_id' =>
+                    $schoolClass->id,
+
+                /*
+                * Keep grade and section for compatibility
+                * with existing I-SPAS pages.
+                */
                 'grade' =>
-                    $request->grade,
+                    $schoolClass->grade,
 
                 'section' =>
-                    $request->section,
+                    $schoolClass->section,
 
                 'subject' =>
                     $request->subject,
@@ -185,9 +209,6 @@ public function index()
                         Str::random(6)
                     ),
 
-                /*
-                 * THIS IS THE OWNER.
-                 */
                 'created_by' =>
                     auth()->id(),
 
@@ -598,11 +619,8 @@ public function index()
             'description' =>
                 'nullable|string',
 
-            'grade' =>
-                'required|string|max:50',
-
-            'section' =>
-                'required|string|max:100',
+            'class_id' =>
+                'required|integer|exists:school_classes,id',
 
             'subject' =>
                 'required|string|max:255',
@@ -646,7 +664,23 @@ public function index()
             ], 404);
         }
 
+        $schoolClass = SchoolClass::where(
+            'id',
+            $request->class_id
+        )
+        ->where(
+            'faculty_id',
+            auth()->id()
+        )
+        ->first();
 
+        if (!$schoolClass) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Selected class not found or access denied.'
+            ], 422);
+        }
         DB::beginTransaction();
 
 
@@ -663,11 +697,14 @@ public function index()
                 'description' =>
                     $request->description,
 
+                'class_id' =>
+                    $schoolClass->id,
+
                 'grade' =>
-                    $request->grade,
+                    $schoolClass->grade,
 
                 'section' =>
-                    $request->section,
+                    $schoolClass->section,
 
                 'subject' =>
                     $request->subject,

@@ -248,7 +248,96 @@
             font-weight: bold;
         }
 
+        /* ======================================
+           LEGEND TABLE
+        ====================================== */
+        .legend-section {
+        margin-top: 18px;
+        margin-bottom: 18px;
+        padding: 14px 16px;
 
+        border: 1px solid #cccccc;
+        border-radius: 6px;
+
+        page-break-inside: avoid;
+        }
+
+        .legend-title {
+            margin-bottom: 10px;
+
+            color: #112244;
+
+            font-size: 15px;
+            font-weight: bold;
+        }
+
+        .legend-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .legend-table td {
+            width: 50%;
+
+            padding: 3px 8px;
+
+            vertical-align: top;
+
+            font-size: 10px;
+        }
+
+        .legend-item {
+            margin-bottom: 6px;
+        }
+
+        .legend-color {
+            display: inline-block;
+
+            width: 13px;
+            height: 13px;
+
+            margin-right: 7px;
+
+            vertical-align: middle;
+
+            border-radius: 2px;
+        }
+
+        .legend-mastered {
+            background: #244f35;
+        }
+
+        .legend-approximating {
+            background: #34526d;
+        }
+
+        .legend-moving {
+            background: #8b5038;
+        }
+
+        .legend-average {
+            background: #984459;
+        }
+
+        .legend-low {
+            background: #8b243c;
+        }
+
+        .legend-retain-revise {
+            background: #6b8e23;
+        }
+
+        .legend-retain {
+            background: #806846;
+        }
+
+        .legend-revise {
+            background: #804833;
+        }
+
+        .legend-reject {
+            background: #a52f43;
+        }
         /* ======================================
            SIGNATURES
         ====================================== */
@@ -681,21 +770,74 @@
         Legend:
     </span>
 
-    Mastered |
-    Approximating Mastery |
-    Moving Towards Mastery |
-    Average Mastery |
-    Low Mastery
+</div>
+{{-- ==========================================
+     LEGEND
+========================================== --}}
 
-    <br>
+<div class="legend-section">
+    <table class="legend-table">
 
-    Retain or Revise |
-    Retain |
-    Revise |
-    Reject
+        <tr>
+
+            <td>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-mastered"></span>
+                    Mastered
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-approximating"></span>
+                    Approximating Mastery
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-moving"></span>
+                    Moving Towards Mastery
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-average"></span>
+                    Average Mastery
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-low"></span>
+                    Low Mastery
+                </div>
+
+            </td>
+
+            <td>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-retain-revise"></span>
+                    Retain or Revise
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-retain"></span>
+                    Retain
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-revise"></span>
+                    Revise
+                </div>
+
+                <div class="legend-item">
+                    <span class="legend-color legend-reject"></span>
+                    Reject
+                </div>
+
+            </td>
+
+        </tr>
+
+    </table>
 
 </div>
-
 
 <!-- ======================================
      SIGNATURES

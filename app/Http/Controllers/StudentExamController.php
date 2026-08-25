@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\DB;
 use App\Models\Exam;
 use App\Models\Question;
 use App\Models\ExamSession;
+use App\Models\SchoolClass;
+use App\Models\ClassStudent;
 use App\Models\StudentAnswer;
 
 class StudentExamController extends Controller
@@ -19,16 +21,224 @@ class StudentExamController extends Controller
     {
         $validated = $request->validate([
             'student_name' => 'required|string|min:3|max:255',
-            'section' => 'required|string|max:100',
             'access_code' => 'required|string|max:20',
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | FIND EXAM
+        |--------------------------------------------------------------------------
+        */
         $exam = Exam::withCount('questions')
             ->where(
                 'access_code',
-                strtoupper(trim($validated['access_code']))
+                strtoupper(
+                    trim($validated['access_code'])
+                )
             )
             ->first();
+
+        if (!$exam) {
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Invalid access code.',
+            ], 404);
+        }
+        /*
+        |--------------------------------------------------------------------------
+        | CHECK EXAM STATUS
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            strtolower(
+                (string) $exam->status
+            ) !== 'published'
+        ) {
+
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'This exam is not open for joining.',
+            ], 403);
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | CHECK ASSIGNED CLASS
+        |--------------------------------------------------------------------------
+        */
+        if (!$exam->class_id) {
+
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'This examination has no assigned class.',
+            ], 422);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET CLASS
+        |--------------------------------------------------------------------------
+        */
+        $schoolClass = SchoolClass::find(
+            $exam->class_id
+        );
+
+        if (!$schoolClass) {
+
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'The class assigned to this examination was not found.',
+            ], 404);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | CHECK STUDENT
+        |--------------------------------------------------------------------------
+        |
+        | Change "student_name" below if your class_students table uses
+        | a different column name.
+        |
+        */
+        $student = ClassStudent::where(
+            'class_id',
+            $schoolClass->id
+        )
+            ->whereRaw(
+                'LOWER(TRIM(student_name)) = ?',
+                [
+                    strtolower(
+                        trim(
+                            $validated['student_name']
+                        )
+                    )
+                ]
+            )
+            ->first();
+
+
+        if (!$student) {
+
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Student not found in the class assigned to this examination.',
+            ], 422);
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | CREATE EXAM SESSION
+        |--------------------------------------------------------------------------
+        */
+        $session = ExamSession::create([
+
+            'exam_id' =>
+                $exam->id,
+
+            'student_name' =>
+                $student->student_name,
+
+            'started_at' =>
+                null,
+
+            'submitted_at' =>
+                null,
+
+            'score' =>
+                0,
+
+            'percentage' =>
+                0,
+
+            'progress' =>
+                0,
+
+            'tab_switches' =>
+                0,
+
+            'idle_seconds' =>
+                0,
+
+            'time_spent' =>
+                0,
+
+            'status' =>
+                'ongoing',
+
+        ]);
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | RESPONSE
+        |--------------------------------------------------------------------------
+        */
+        return response()->json([
+
+            'status' =>
+                true,
+
+            'message' =>
+                'Student joined lobby successfully.',
+
+            'session' =>
+                $session,
+
+            'exam' =>
+                $exam,
+
+            'student' => [
+
+                'id' =>
+                    $student->id,
+
+                'name' =>
+                    $student->student_name,
+
+                'grade' =>
+                    $schoolClass->grade,
+
+                'section' =>
+                    $schoolClass->section,
+
+                'class_id' =>
+                    $schoolClass->id,
+
+            ],
+
+        ], 201);
+    }
+    /**
+     * Get students allowed to join an exam
+     * based on the exam's assigned class.
+     */
+    public function examStudents(Request $request)
+    {
+        $validated = $request->validate([
+            'access_code' => 'required|string|max:20',
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | FIND EXAM
+        |--------------------------------------------------------------------------
+        */
+
+        $exam = Exam::where(
+            'access_code',
+            strtoupper(
+                trim($validated['access_code'])
+            )
+        )->first();
+
 
         if (!$exam) {
             return response()->json([
@@ -37,91 +247,188 @@ class StudentExamController extends Controller
             ], 404);
         }
 
-        if (strtolower($exam->status) !== 'published') {
+
+        /*
+        |--------------------------------------------------------------------------
+        | CHECK EXAM STATUS
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            strtolower(
+                (string) $exam->status
+            ) !== 'published'
+        ) {
             return response()->json([
                 'status' => false,
-                'message' => 'This exam is not open for joining.',
+                'message' =>
+                    'This exam is not open for joining.',
             ], 403);
         }
 
-        $studentDisplayName =
-            trim($validated['student_name']) .
-            ' - ' .
-            trim($validated['section']);
 
-        $session = ExamSession::create([
-            'exam_id' => $exam->id,
-            'student_name' => $studentDisplayName,
-            'started_at' => null,
-            'submitted_at' => null,
-            'score' => 0,
-            'percentage' => 0,
-            'progress' => 0,
-            'tab_switches' => 0,
-            'idle_seconds' => 0,
-            'time_spent' => 0,
-            'status' => 'ongoing',
-        ]);
+        /*
+        |--------------------------------------------------------------------------
+        | CHECK ASSIGNED CLASS
+        |--------------------------------------------------------------------------
+        */
+
+        if (!$exam->class_id) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'This examination has no assigned class.',
+            ], 422);
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | FIND CLASS
+        |--------------------------------------------------------------------------
+        */
+
+        $schoolClass = SchoolClass::find(
+            $exam->class_id
+        );
+
+
+        if (!$schoolClass) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'The class assigned to this examination was not found.',
+            ], 404);
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET STUDENTS
+        |--------------------------------------------------------------------------
+        */
+
+        $students = ClassStudent::where(
+            'class_id',
+            $schoolClass->id
+        )
+            ->orderBy(
+                'student_name',
+                'asc'
+            )
+            ->get([
+                'id',
+                'student_name',
+            ]);
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | RESPONSE
+        |--------------------------------------------------------------------------
+        */
 
         return response()->json([
             'status' => true,
-            'message' => 'Student joined lobby successfully.',
-            'session' => $session,
-            'exam' => $exam,
-            'student' => [
-                'name' => trim($validated['student_name']),
-                'section' => trim($validated['section']),
+
+            'exam' => [
+                'id' =>
+                    $exam->id,
+
+                'title' =>
+                    $exam->title,
+
+                'subject' =>
+                    $exam->subject,
             ],
-        ], 201);
+
+            'class' => [
+                'id' =>
+                    $schoolClass->id,
+
+                'grade' =>
+                    $schoolClass->grade,
+
+                'section' =>
+                    $schoolClass->section,
+            ],
+
+            'students' =>
+                $students,
+        ]);
     }
 
     /**
      * Public exam status for the student lobby.
      */
-   public function examStatus($id)
-    {
-        $exam = Exam::withCount('questions')
-            ->find($id);
+public function examStatus($id)
+{
+    $exam = Exam::withCount('questions')
+        ->find($id);
 
-        if (!$exam) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Examination not found.',
-            ], 404);
-        }
-
-        $ongoingStudents = ExamSession::where(
-            'exam_id',
-            $exam->id
-        )
-            ->where('status', 'ongoing')
-            ->count();
-
-        $submittedStudents = ExamSession::where(
-            'exam_id',
-            $exam->id
-        )
-            ->where('status', 'submitted')
-            ->count();
-
+    if (!$exam) {
         return response()->json([
-            'status' => true,
-            'data' => [
-                'id' => $exam->id,
-                'title' => $exam->title,
-                'course' => $exam->course,
-                'duration' => (int) $exam->duration,
-                'passing' => (float) ($exam->passing ?? 75),
-                'status' => $exam->status,
-                'questions_count' => $exam->questions_count,
-                'ongoing_students' => $ongoingStudents,
-                'submitted_students' => $submittedStudents,
-                'leaderboard_available' =>
-                    strtolower((string) $exam->status) === 'finished'
-                    || $ongoingStudents === 0,
-            ],
-        ]);
+            'status' => false,
+            'message' => 'Examination not found.',
+        ], 404);
     }
+
+    $ongoingStudents = ExamSession::where(
+        'exam_id',
+        $exam->id
+    )
+        ->where('status', 'ongoing')
+        ->count();
+
+    $submittedStudents = ExamSession::where(
+        'exam_id',
+        $exam->id
+    )
+        ->where('status', 'submitted')
+        ->count();
+
+    return response()->json([
+        'status' => true,
+
+        'data' => [
+            'id' => $exam->id,
+
+            'title' => $exam->title,
+
+            'class_id' => $exam->class_id,
+
+            'grade' => $exam->grade,
+
+            'section' => $exam->section,
+
+            'subject' => $exam->subject,
+
+            'duration' => (int) $exam->duration,
+
+            'passing' => (float) (
+                $exam->passing ?? 75
+            ),
+
+            'status' => $exam->status,
+
+            'questions_count' =>
+                $exam->questions_count,
+
+            'ongoing_students' =>
+                $ongoingStudents,
+
+            'submitted_students' =>
+                $submittedStudents,
+
+            'leaderboard_available' =>
+                strtolower(
+                    (string) $exam->status
+                ) === 'finished'
+                ||
+                $ongoingStudents === 0,
+        ],
+    ]);
+}
 
     /**
      * Public student lobby list.
