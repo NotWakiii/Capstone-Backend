@@ -159,6 +159,10 @@ Route::middleware('auth:sanctum')->group(function () {
         '/exams/{id}/start',
         [ExamController::class, 'startExam']
     );
+    Route::post(
+        '/exams/{id}/cancel-lobby',
+        [ExamController::class, 'cancelLobby']
+    );
 
     Route::post(
         '/exams/{id}/end',
@@ -288,6 +292,7 @@ Route::middleware('auth:sanctum')->group(function () {
 use App\Http\Controllers\AdminFacultyController;
 use App\Http\Controllers\AdminExamController;
 use App\Http\Controllers\AdminResultController;
+use App\Http\Controllers\AuditLogController;
 
 Route::middleware([
     'auth:sanctum',
@@ -337,10 +342,16 @@ Route::middleware([
         '/faculty/{id}/status',
         [AdminFacultyController::class, 'updateStatus']
     );
+    //helper route for testing audit logging
+    Route::get(
+        '/audit-logs',
+        [AuditLogController::class, 'index']
+    );
 
 });
 //class management routes
 use App\Http\Controllers\ClassManagementController;
+
 Route::middleware('auth:sanctum')
     ->prefix('faculty')
     ->group(function () {

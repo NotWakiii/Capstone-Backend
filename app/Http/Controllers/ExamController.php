@@ -9,6 +9,9 @@ use App\Models\Question;
 use App\Models\QuestionOption;
 use App\Models\ExamSession;
 use App\Models\SchoolClass;
+use App\Models\StudentAnswer;
+
+use App\Helpers\AuditLogger;
 
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -115,8 +118,12 @@ public function index()
             'description' =>
                 'nullable|string',
 
-            'class_id' =>
-                'required|integer|exists:school_classes,id',
+            // NEW: Faculty can select one or more classes.
+            'class_ids' =>
+                'required|array|min:1',
+
+            'class_ids.*' =>
+                'required|integer|distinct|exists:school_classes,id',
 
             'subject' =>
                 'required|string|max:255',
@@ -148,106 +155,143 @@ public function index()
             'questions.*.time' =>
                 'nullable|integer|min:1',
         ]);
-$schoolClass = SchoolClass::where(
-    'id',
-    $validated['class_id']
-)
-    ->where(
-        'faculty_id',
-        $request->user()->id
-    )
-    ->firstOrFail();
 
-        if (!$schoolClass) {
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET SELECTED CLASSES
+        |--------------------------------------------------------------------------
+        |
+        | Only allow the logged-in faculty to assign the exam
+        | to classes that belong to them.
+        |
+        */
+
+        $schoolClasses = SchoolClass::whereIn(
+            'id',
+            $validated['class_ids']
+        )
+        ->where(
+            'faculty_id',
+            $request->user()->id
+        )
+        ->get();
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | VERIFY OWNERSHIP OF ALL SELECTED CLASSES
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $schoolClasses->count()
+            !== count($validated['class_ids'])
+        ) {
 
             return response()->json([
                 'status' => false,
                 'message' =>
-                    'Selected class not found or access denied.'
+                    'One or more selected classes were not found or access was denied.'
             ], 422);
         }
+
 
         DB::beginTransaction();
 
         try {
 
+            $createdExams = [];
+
+
             /*
-             * Create exam.
-             */
-            $exam = Exam::create([
+            |--------------------------------------------------------------------------
+            | CREATE ONE EXAM FOR EACH SELECTED CLASS
+            |--------------------------------------------------------------------------
+            */
 
-                'title' =>
-                    $request->title,
+            foreach ($schoolClasses as $schoolClass) {
 
-                'description' =>
-                    $request->description,
+                $exam = Exam::create([
 
-                'class_id' =>
-                    $schoolClass->id,
+                    'title' =>
+                        $validated['title'],
+
+                    'description' =>
+                        $validated['description'] ?? null,
+
+                    'class_id' =>
+                        $schoolClass->id,
+
+                    /*
+                    * Keep grade and section for compatibility
+                    * with existing I-SPAS pages.
+                    */
+                    'grade' =>
+                        $schoolClass->grade,
+
+                    'section' =>
+                        $schoolClass->section,
+
+                    'subject' =>
+                        $validated['subject'],
+
+                    'duration' =>
+                        $validated['duration'],
+
+                    'passing' =>
+                        $validated['passing'],
+
+                    /*
+                    * Each generated exam receives
+                    * its own access code.
+                    */
+                    'access_code' =>
+                        strtoupper(
+                            Str::random(6)
+                        ),
+
+                    'created_by' =>
+                        auth()->id(),
+
+                    'status' =>
+                        'draft'
+                ]);
+
 
                 /*
-                * Keep grade and section for compatibility
-                * with existing I-SPAS pages.
+                |--------------------------------------------------------------------------
+                | COPY QUESTIONS TO THIS EXAM
+                |--------------------------------------------------------------------------
                 */
-                'grade' =>
-                    $schoolClass->grade,
 
-                'section' =>
-                    $schoolClass->section,
-
-                'subject' =>
-                    $request->subject,
-
-                'duration' =>
-                    $request->duration,
-
-                'passing' =>
-                    $request->passing,
-
-                'access_code' =>
-                    strtoupper(
-                        Str::random(6)
-                    ),
-
-                'created_by' =>
-                    auth()->id(),
-
-                'status' =>
-                    'draft'
-            ]);
-
-
-            /*
-             * Create questions.
-             */
-            foreach (
-                $request->questions
-                as $index => $item
-            ) {
-
-                $type = match (
-                    $item['type']
+                foreach (
+                    $validated['questions']
+                    as $index => $item
                 ) {
 
-                    'Multiple Choice' =>
-                        'multiple_choice',
+                    $type = match (
+                        $item['type']
+                    ) {
 
-                    'True or False' =>
-                        'true_false',
+                        'Multiple Choice' =>
+                            'multiple_choice',
 
-                    'Identification' =>
-                        'identification',
+                        'True or False' =>
+                            'true_false',
 
-                    'Essay' =>
-                        'essay',
+                        'Identification' =>
+                            'identification',
 
-                    default =>
-                        'multiple_choice'
-                };
+                        'Essay' =>
+                            'essay',
+
+                        default =>
+                            'multiple_choice'
+                    };
 
 
-                $question =
-                    Question::create([
+                    $question = Question::create([
 
                         'exam_id' =>
                             $exam->id,
@@ -258,10 +302,6 @@ $schoolClass = SchoolClass::where(
                         'question_type' =>
                             $type,
 
-                        /*
-                         * Competency used
-                         * by Item Analysis.
-                         */
                         'competency' =>
                             $item['competency']
                             ?? null,
@@ -283,85 +323,106 @@ $schoolClass = SchoolClass::where(
                     ]);
 
 
-                /*
-                 * Multiple Choice Options.
-                 */
-                if (
-                    $type ===
-                        'multiple_choice'
-                    &&
-                    isset(
-                        $item['options']
-                    )
-                ) {
+                    /*
+                    |--------------------------------------------------------------------------
+                    | MULTIPLE CHOICE OPTIONS
+                    |--------------------------------------------------------------------------
+                    */
 
-                    foreach (
-                        $item['options']
-                        as $optionIndex =>
-                            $optionText
+                    if (
+                        $type === 'multiple_choice'
+                        &&
+                        isset($item['options'])
                     ) {
 
-                        if (
-                            !$optionText
+                        foreach (
+                            $item['options']
+                            as $optionIndex => $optionText
                         ) {
-                            continue;
-                        }
 
-                        $letter =
-                            chr(
-                                65 +
-                                $optionIndex
+                            if (!$optionText) {
+                                continue;
+                            }
+
+
+                            $letter = chr(
+                                65 + $optionIndex
                             );
 
 
-                        QuestionOption::create([
+                            QuestionOption::create([
 
-                            'question_id' =>
-                                $question->id,
+                                'question_id' =>
+                                    $question->id,
 
-                            'option_text' =>
-                                $optionText,
+                                'option_text' =>
+                                    $optionText,
 
-                            'is_correct' =>
-                                (
-                                    $item['answer']
-                                    ?? ''
-                                )
-                                === $letter,
-                        ]);
+                                'is_correct' =>
+                                    (
+                                        $item['answer']
+                                        ?? ''
+                                    ) === $letter,
+                            ]);
+                        }
                     }
                 }
+
+
+                /*
+                * Store each generated exam so the frontend
+                * can receive all created exams.
+                */
+                $createdExams[] =
+                    $exam->load(
+                        'questions.options'
+                    );
             }
 
 
             DB::commit();
+
+            foreach ($createdExams as $createdExam) {
+                AuditLogger::log(
+                    'CREATE_EXAM',
+                    'Examination',
+                    'Created examination: ' .
+                    $createdExam->title .
+                    ' for ' .
+                    $createdExam->grade .
+                    ' - ' .
+                    $createdExam->section
+                );
+            }
 
 
             return response()->json([
                 'status' => true,
 
                 'message' =>
-                    'Exam created successfully',
+                    count($createdExams)
+                    . ' exam(s) created successfully.',
 
                 'data' =>
-                    $exam->load(
-                        'questions.options'
-                    )
+                    $createdExams
+
             ], 201);
 
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
 
             DB::rollBack();
+
 
             return response()->json([
                 'status' => false,
 
                 'message' =>
-                    'Failed to create exam',
+                    'Failed to create exams.',
 
                 'error' =>
                     $e->getMessage()
+
             ], 500);
         }
     }
@@ -440,6 +501,12 @@ $schoolClass = SchoolClass::where(
             'ended_at' =>
                 null
         ]);
+
+        AuditLogger::log(
+            'RESTART_EXAM',
+            'Examination',
+            'Reopened examination: ' . $exam->title
+        );
 
 
         return response()->json([
@@ -586,6 +653,12 @@ $schoolClass = SchoolClass::where(
             'ended_at' =>
                 now()
         ]);
+
+        AuditLogger::log(
+            'END_EXAM',
+            'Examination',
+            'Ended examination: ' . $exam->title
+        );
 
 
         return response()->json([
@@ -847,6 +920,12 @@ $schoolClass = SchoolClass::where(
 
             DB::commit();
 
+            AuditLogger::log(
+                'UPDATE_EXAM',
+                'Examination',
+                'Updated examination: ' . $exam->title
+            );
+
 
             return response()->json([
                 'status' => true,
@@ -908,6 +987,12 @@ $schoolClass = SchoolClass::where(
             'status' =>
                 'published'
         ]);
+
+        AuditLogger::log(
+            'PUBLISH_EXAM',
+            'Examination',
+            'Published examination: ' . $exam->title
+        );
 
 
         return response()->json([
@@ -988,6 +1073,12 @@ $schoolClass = SchoolClass::where(
                 now(),
         ]);
 
+        AuditLogger::log(
+            'START_EXAM',
+            'Examination',
+            'Started examination: ' . $exam->title
+        );
+
 
         return response()->json([
             'status' => true,
@@ -1026,6 +1117,12 @@ $schoolClass = SchoolClass::where(
         }
 
 
+        AuditLogger::log(
+            'DELETE_EXAM',
+            'Examination',
+            'Deleted examination: ' . $exam->title
+        );
+
         $exam->delete();
 
 
@@ -1036,4 +1133,165 @@ $schoolClass = SchoolClass::where(
                 'Exam deleted successfully'
         ]);
     }
+public function cancelLobby($id)
+{
+    $user = auth()->user();
+
+    if (!$user) {
+        return response()->json([
+            'status' => false,
+            'message' => 'Unauthenticated.',
+        ], 401);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | FIND EXAM
+    |--------------------------------------------------------------------------
+    */
+
+    $examQuery = Exam::where(
+        'id',
+        $id
+    );
+
+
+    if ($user->role !== 'admin') {
+
+        $examQuery->where(
+            'created_by',
+            $user->id
+        );
+
+    }
+
+
+    $exam =
+        $examQuery->first();
+
+
+    if (!$exam) {
+
+        return response()->json([
+            'status' => false,
+            'message' =>
+                'Examination not found or access denied.',
+        ], 404);
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | DO NOT CANCEL AFTER EXAM STARTS
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        strtolower(
+            (string) $exam->status
+        ) === 'started'
+    ) {
+
+        return response()->json([
+            'status' => false,
+            'message' =>
+                'The examination has already started.',
+        ], 422);
+
+    }
+
+
+    DB::beginTransaction();
+
+
+    try {
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET WAITING LOBBY SESSIONS
+        |--------------------------------------------------------------------------
+        */
+
+        $sessionIds =
+            ExamSession::where(
+                'exam_id',
+                $exam->id
+            )
+            ->where(
+                'status',
+                'ongoing'
+            )
+            ->whereNull(
+                'started_at'
+            )
+            ->pluck('id');
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | DELETE SESSION DATA
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $sessionIds->isNotEmpty()
+        ) {
+
+            StudentAnswer::whereIn(
+                'exam_session_id',
+                $sessionIds
+            )->delete();
+
+
+            DB::table(
+                'monitor_logs'
+            )
+            ->whereIn(
+                'exam_session_id',
+                $sessionIds
+            )
+            ->delete();
+
+
+            ExamSession::whereIn(
+                'id',
+                $sessionIds
+            )->delete();
+
+        }
+
+
+        DB::commit();
+
+        AuditLogger::log(
+            'CANCEL_LOBBY',
+            'Examination',
+            'Cancelled lobby for examination: ' . $exam->title
+        );
+
+
+        return response()->json([
+            'status' => true,
+            'message' =>
+                'Examination lobby cancelled successfully.',
+        ]);
+
+
+    } catch (\Throwable $error) {
+
+        DB::rollBack();
+
+
+        return response()->json([
+            'status' => false,
+            'message' =>
+                'Failed to cancel examination lobby.',
+            'error' =>
+                $error->getMessage(),
+        ], 500);
+
+    }
+}
 }

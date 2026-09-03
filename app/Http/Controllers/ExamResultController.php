@@ -205,7 +205,6 @@ class ExamResultController extends Controller
             'exam' => [
                 'id' => $session->exam->id,
                 'title' => $session->exam->title,
-                'course' => $session->exam->course,
                 'passing' => $session->exam->passing,
             ],
 
