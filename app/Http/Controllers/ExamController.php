@@ -149,11 +149,20 @@ public function index()
             'questions.*.answer' =>
                 'nullable',
 
+            'questions.*.options' =>
+                'nullable|array',
+
+            'questions.*.options.*' =>
+                'nullable|string|max:1000',
+
             'questions.*.points' =>
                 'nullable|numeric|min:0',
 
             'questions.*.time' =>
                 'nullable|integer|min:1',
+
+            'questions.*.competency' =>
+                'nullable|string|max:1000',
         ]);
 
 
@@ -468,57 +477,46 @@ public function index()
     |--------------------------------------------------------------------------
     */
 
-    public function restartExam($id)
-    {
-        $exam =
-            $this->findAccessibleExam(
-                $id
-            );
+public function restartExam($id)
+{
+    $exam = $this->findAccessibleExam($id);
 
-        if (!$exam) {
-
-            return response()->json([
-                'status' => false,
-
-                'message' =>
-                    'Exam not found or access denied.'
-            ], 404);
-        }
-
-
-        $exam->update([
-            'status' =>
-                'published',
-
-            'access_code' =>
-                strtoupper(
-                    Str::random(6)
-                ),
-
-            'started_at' =>
-                null,
-
-            'ended_at' =>
-                null
-        ]);
-
-        AuditLogger::log(
-            'RESTART_EXAM',
-            'Examination',
-            'Reopened examination: ' . $exam->title
-        );
-
-
+    if (!$exam) {
         return response()->json([
-            'status' => true,
-
-            'message' =>
-                'Exam restarted successfully',
-
-            'data' =>
-                $exam
-        ]);
+            'status' => false,
+            'message' => 'Exam not found or access denied.'
+        ], 404);
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESTART / REOPEN EXAM
+    |--------------------------------------------------------------------------
+    |
+    | Keep the existing exam details, questions, and previous submitted
+    | results. Only reopen the examination and generate a new access code.
+    |
+    */
+
+    $exam->update([
+        'status' => 'published',
+        'access_code' => strtoupper(Str::random(6)),
+        'started_at' => null,
+        'ended_at' => null,
+    ]);
+
+    AuditLogger::log(
+        'RESTART_EXAM',
+        'Examination',
+        'Reopened examination: ' . $exam->title
+    );
+
+    return response()->json([
+        'status' => true,
+        'message' => 'Exam restarted successfully.',
+        'data' => $exam->fresh()
+    ]);
+}
 
 
     /*
