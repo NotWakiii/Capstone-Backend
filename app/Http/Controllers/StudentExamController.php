@@ -11,6 +11,7 @@ use App\Models\ExamSession;
 use App\Models\SchoolClass;
 use App\Models\ClassStudent;
 use App\Models\StudentAnswer;
+use App\Models\MonitorLog;
 
 class StudentExamController extends Controller
 {
@@ -474,7 +475,10 @@ public function lobbyStudents($id)
         ], 401);
     }
 
-    $examQuery = Exam::where('id', $id);
+    $examQuery = Exam::where(
+        'id',
+        $id
+    );
 
     if ($user->role !== 'admin') {
         $examQuery->where(
@@ -503,6 +507,77 @@ public function lobbyStudents($id)
         )
         ->latest()
         ->get();
+
+    $sessionIds = $sessions
+        ->pluck('id');
+
+    $violationCounts = MonitorLog::whereIn(
+        'exam_session_id',
+        $sessionIds
+    )
+        ->whereIn(
+            'activity',
+            [
+                'copy_attempt',
+                'paste_attempt',
+                'fullscreen_exit',
+            ]
+        )
+        ->selectRaw(
+            'exam_session_id, activity, COUNT(*) as total'
+        )
+        ->groupBy(
+            'exam_session_id',
+            'activity'
+        )
+        ->get()
+        ->groupBy(
+            'exam_session_id'
+        );
+
+    $sessions->transform(
+        function ($session) use (
+            $violationCounts
+        ) {
+            $logs =
+                $violationCounts->get(
+                    $session->id,
+                    collect()
+                );
+
+            $session->copy_attempts =
+                (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'copy_attempt'
+                        )
+                        ?->total ?? 0
+                );
+
+            $session->paste_attempts =
+                (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'paste_attempt'
+                        )
+                        ?->total ?? 0
+                );
+
+            $session->fullscreen_exits =
+                (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'fullscreen_exit'
+                        )
+                        ?->total ?? 0
+                );
+
+            return $session;
+        }
+    );
 
     return response()->json([
         'status' => true,
@@ -710,20 +785,6 @@ public function lobbyStudents($id)
 
         $isCorrect =
             $studentAnswer === $correctAnswer;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | ESSAY
-    |--------------------------------------------------------------------------
-    |
-    | Essays normally require manual checking, so they are saved as
-    | incorrect for now until the professor grades them.
-    |
-    */
-
-    if ($questionType === 'essay') {
-        $isCorrect = false;
     }
 
     /*

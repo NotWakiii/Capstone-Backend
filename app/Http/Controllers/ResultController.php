@@ -6,6 +6,7 @@ use App\Models\Exam;
 use App\Models\ExamSession;
 use App\Models\Question;
 use Barryvdh\DomPDF\Facade\Pdf;
+use App\Models\MonitorLog;
 
 class ResultController extends Controller
 {
@@ -586,150 +587,260 @@ class ResultController extends Controller
     public function examResults($id)
     {
         /*
-         * Ownership check first.
-         */
-        $exam =
-            $this->findAccessibleExam(
-                $id
-            );
-
+        |--------------------------------------------------------------------------
+        | FIND ACCESSIBLE EXAM
+        |--------------------------------------------------------------------------
+        */
+        $exam = $this->findAccessibleExam($id);
         if (!$exam) {
             return response()->json([
                 'status' => false,
-                'message' =>
-                    'Examination not found or access denied.',
+                'message' => 'Examination not found or access denied.',
             ], 404);
         }
-
-        $sessions =
-            ExamSession::with([
-                'exam',
-                'answers.question'
-            ])
-            ->where(
-                'exam_id',
-                $exam->id
-            )
-            ->where(
-                'status',
-                'submitted'
-            )
+        /*
+        |--------------------------------------------------------------------------
+        | GET SUBMITTED SESSIONS
+        |--------------------------------------------------------------------------
+        */
+        $sessions = ExamSession::with([
+            'exam',
+            'answers.question'
+        ])
+            ->where('exam_id', $exam->id)
+            ->where('status', 'submitted')
             ->latest()
             ->get();
-
-        $results =
-            $sessions->map(
-                function ($session) {
-
-                    $totalQuestions =
-                        Question::where(
-                            'exam_id',
-                            $session->exam_id
-                        )
-                        ->count();
-
-                    $correct =
-                        $session
-                            ->answers
-                            ->where(
-                                'is_correct',
-                                true
-                            )
-                            ->count();
-
-                    $wrong =
-                        max(
+        /*
+        |--------------------------------------------------------------------------
+        | GET VIOLATION COUNTS
+        |--------------------------------------------------------------------------
+        |
+        | Copy, paste and fullscreen exit violations are stored
+        | inside monitor_logs instead of exam_sessions.
+        |
+        */
+        $sessionIds = $sessions->pluck('id');
+        $violationCounts = MonitorLog::whereIn(
+            'exam_session_id',
+            $sessionIds
+        )
+            ->whereIn('activity', [
+                'copy_attempt',
+                'paste_attempt',
+                'fullscreen_exit'
+            ])
+            ->selectRaw(
+                'exam_session_id, activity, COUNT(*) as total'
+            )
+            ->groupBy(
+                'exam_session_id',
+                'activity'
+            )
+            ->get()
+            ->groupBy('exam_session_id');
+        /*
+        |--------------------------------------------------------------------------
+        | TOTAL QUESTIONS
+        |--------------------------------------------------------------------------
+        */
+        $totalQuestions = Question::where(
+            'exam_id',
+            $exam->id
+        )->count();
+        /*
+        |--------------------------------------------------------------------------
+        | BUILD RESULTS
+        |--------------------------------------------------------------------------
+        */
+        $results = $sessions->map(
+            function ($session) use (
+                $totalQuestions,
+                $violationCounts,
+                $exam
+            ) {
+                $correct = $session
+                    ->answers
+                    ->where(
+                        'is_correct',
+                        true
+                    )
+                    ->count();
+                $wrong = max(
+                    $totalQuestions - $correct,
+                    0
+                );
+                $percentage = (float)
+                    $session->percentage;
+                if (
+                    $percentage <= 0 &&
+                    $totalQuestions > 0
+                ) {
+                    $percentage = round(
+                        (
+                            $correct /
                             $totalQuestions
-                            -
-                            $correct,
-                            0
-                        );
-
-                    $percentage =
-                        (float)
-                        $session
-                            ->percentage;
-
-                    if (
-                        $percentage <= 0
-                        &&
-                        $totalQuestions > 0
-                    ) {
-
-                        $percentage =
-                            round(
-                                (
-                                    $correct
-                                    /
-                                    $totalQuestions
-                                ) * 100,
-                                2
-                            );
-                    }
-
-                    return [
-                        'id' =>
-                            $session->id,
-
-                        'student_name' =>
-                            $session
-                                ->student_name,
-
-                        'score' =>
-                            $session->score,
-
-                        'percentage' =>
-                            $percentage,
-
-                        'correct' =>
-                            $correct,
-
-                        'wrong' =>
-                            $wrong,
-
-                        'time_spent' =>
-                            $session
-                                ->time_spent,
-
-                        'submitted_at' =>
-                            $session
-                                ->submitted_at,
-                    ];
+                        ) * 100,
+                        2
+                    );
                 }
-            );
-
+                /*
+                |--------------------------------------------------------------------------
+                | SESSION VIOLATIONS
+                |--------------------------------------------------------------------------
+                */
+                $logs = $violationCounts->get(
+                    $session->id,
+                    collect()
+                );
+                $copyAttempts = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'copy_attempt'
+                        )
+                        ?->total
+                    ?? 0
+                );
+                $pasteAttempts = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'paste_attempt'
+                        )
+                        ?->total
+                    ?? 0
+                );
+                $fullscreenExits = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'fullscreen_exit'
+                        )
+                        ?->total
+                    ?? 0
+                );
+                /*
+                |--------------------------------------------------------------------------
+                | PASSED / FAILED
+                |--------------------------------------------------------------------------
+                */
+                $passing = (float) (
+                    $exam->passing ?? 75
+                );
+                return [
+                    'id' =>
+                        $session->id,
+                    'student_name' =>
+                        $session->student_name,
+                    'score' =>
+                        $session->score,
+                    'percentage' =>
+                        $percentage,
+                    'passed' =>
+                        $percentage >= $passing,
+                    'correct' =>
+                        $correct,
+                    'wrong' =>
+                        $wrong,
+                    'tab_switches' =>
+                        (int) (
+                            $session->tab_switches ?? 0
+                        ),
+                    'copy_attempts' =>
+                        $copyAttempts,
+                    'paste_attempts' =>
+                        $pasteAttempts,
+                    'fullscreen_exits' =>
+                        $fullscreenExits,
+                    'idle_seconds' =>
+                        (int) (
+                            $session->idle_seconds ?? 0
+                        ),
+                    'time_spent' =>
+                        $session->time_spent,
+                    'started_at' =>
+                        $session->started_at,
+                    'submitted_at' =>
+                        $session->submitted_at,
+                    'status' =>
+                        $session->status,
+                ];
+            }
+        );
+        /*
+        |--------------------------------------------------------------------------
+        | SUMMARY
+        |--------------------------------------------------------------------------
+        */
+        $studentsCount = $results->count();
+        $averageScore = $studentsCount > 0
+            ? round(
+                (float) $results->avg('score'),
+                2
+            )
+            : 0;
+        $averagePercentage = $studentsCount > 0
+            ? round(
+                (float) $results->avg(
+                    'percentage'
+                ),
+                2
+            )
+            : 0;
+        $highestScore = $studentsCount > 0
+            ? $results->max('score')
+            : 0;
+        $lowestScore = $studentsCount > 0
+            ? $results->min('score')
+            : 0;
+        $passed = $results
+            ->where('passed', true)
+            ->count();
+        $failed = $results
+            ->where('passed', false)
+            ->count();
+        /*
+        |--------------------------------------------------------------------------
+        | RESPONSE
+        |--------------------------------------------------------------------------
+        */
         return response()->json([
             'status' => true,
-
             'exam' => [
                 'id' =>
                     $exam->id,
-
                 'title' =>
                     $exam->title,
-
                 'grade' =>
                     $exam->grade,
-
                 'section' =>
                     $exam->section,
-
                 'subject' =>
                     $exam->subject,
-
                 'passing' =>
                     $exam->passing,
-
                 'questions_count' =>
-                    Question::where(
-                        'exam_id',
-                        $exam->id
-                    )
-                    ->count(),
+                    $totalQuestions,
             ],
-
+            'summary' => [
+                'students_count' =>
+                    $studentsCount,
+                'average_score' =>
+                    $averageScore,
+                'average_percentage' =>
+                    $averagePercentage,
+                'highest_score' =>
+                    $highestScore,
+                'lowest_score' =>
+                    $lowestScore,
+                'passed' =>
+                    $passed,
+                'failed' =>
+                    $failed,
+            ],
             'data' =>
-                $results
+                $results,
         ]);
     }
 
