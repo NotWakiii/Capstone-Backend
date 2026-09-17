@@ -85,7 +85,7 @@ class ExamResultController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | GET VIOLATION COUNTS
+        | GET MONITORING LOG COUNTS + DURATIONS
         |--------------------------------------------------------------------------
         */
         $sessionIds = $sessions->pluck('id');
@@ -97,13 +97,14 @@ class ExamResultController extends Controller
             ->whereIn(
                 'activity',
                 [
+                    'tab_switch',
                     'copy_attempt',
                     'paste_attempt',
                     'fullscreen_exit',
                 ]
             )
             ->selectRaw(
-                'exam_session_id, activity, COUNT(*) as total'
+                'exam_session_id, activity, COUNT(*) as total, COALESCE(SUM(duration_seconds), 0) as duration_seconds'
             )
             ->groupBy(
                 'exam_session_id',
@@ -154,6 +155,29 @@ class ExamResultController extends Controller
                         ?->total ?? 0
                 );
 
+                $tabSwitchSeconds = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'tab_switch'
+                        )
+                        ?->duration_seconds ?? 0
+                );
+
+                $fullscreenExitSeconds = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'fullscreen_exit'
+                        )
+                        ?->duration_seconds ?? 0
+                );
+
+                $totalAwaySeconds =
+                    $tabSwitchSeconds
+                    +
+                    $fullscreenExitSeconds;
+
                 return [
                     'id' => $session->id,
                     'student_name' => $session->student_name,
@@ -162,20 +186,37 @@ class ExamResultController extends Controller
                     'passed' =>
                         (float) $session->percentage >=
                         (float) $exam->passing,
+
                     'started_at' => $session->started_at,
                     'submitted_at' => $session->submitted_at,
                     'time_spent' => $session->time_spent,
+
                     'tab_switches' =>
                         (int) ($session->tab_switches ?? 0),
+
+                    'tab_switch_seconds' =>
+                        $tabSwitchSeconds,
+
                     'copy_attempts' =>
                         $copyAttempts,
+
                     'paste_attempts' =>
                         $pasteAttempts,
+
                     'fullscreen_exits' =>
                         $fullscreenExits,
+
+                    'fullscreen_exit_seconds' =>
+                        $fullscreenExitSeconds,
+
+                    'total_away_seconds' =>
+                        $totalAwaySeconds,
+
                     'idle_seconds' =>
                         (int) ($session->idle_seconds ?? 0),
-                    'status' => $session->status,
+
+                    'status' =>
+                        $session->status,
                 ];
             }
         );
@@ -187,6 +228,7 @@ class ExamResultController extends Controller
         */
         return response()->json([
             'success' => true,
+
             'exam' => [
                 'id' => $exam->id,
                 'title' => $exam->title,
@@ -197,27 +239,48 @@ class ExamResultController extends Controller
                 'access_code' => $exam->access_code,
                 'passing' => $exam->passing,
             ],
+
             'summary' => [
-                'students_count' => $sessions->count(),
-                'highest_score' => $sessions->count() > 0
-                    ? $sessions->max('score')
-                    : 0,
-                'lowest_score' => $sessions->count() > 0
-                    ? $sessions->min('score')
-                    : 0,
-                'average_score' => $sessions->count() > 0
-                    ? round($sessions->avg('score'), 2)
-                    : 0,
-                'average_percentage' => $sessions->count() > 0
-                    ? round($sessions->avg('percentage'), 2)
-                    : 0,
-                'passed' => $sessions
-                    ->where('passed', true)
-                    ->count(),
-                'failed' => $sessions
-                    ->where('passed', false)
-                    ->count(),
+                'students_count' =>
+                    $sessions->count(),
+
+                'highest_score' =>
+                    $sessions->count() > 0
+                        ? $sessions->max('score')
+                        : 0,
+
+                'lowest_score' =>
+                    $sessions->count() > 0
+                        ? $sessions->min('score')
+                        : 0,
+
+                'average_score' =>
+                    $sessions->count() > 0
+                        ? round(
+                            $sessions->avg('score'),
+                            2
+                        )
+                        : 0,
+
+                'average_percentage' =>
+                    $sessions->count() > 0
+                        ? round(
+                            $sessions->avg('percentage'),
+                            2
+                        )
+                        : 0,
+
+                'passed' =>
+                    $sessions
+                        ->where('passed', true)
+                        ->count(),
+
+                'failed' =>
+                    $sessions
+                        ->where('passed', false)
+                        ->count(),
             ],
+
             'data' => $sessions
         ]);
     }
@@ -235,8 +298,10 @@ class ExamResultController extends Controller
         ])->findOrFail($sessionId);
 
         /*
-         * Faculty must own the exam.
-         */
+        |--------------------------------------------------------------------------
+        | FACULTY MUST OWN THE EXAM
+        |--------------------------------------------------------------------------
+        */
         if (
             (int) $session->exam->created_by !==
             (int) $faculty->id
@@ -249,67 +314,166 @@ class ExamResultController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | GET STUDENT VIOLATIONS
+        | GET STUDENT MONITORING LOGS
         |--------------------------------------------------------------------------
         */
-        $violationCounts = MonitorLog::where(
+        $violationLogs = MonitorLog::where(
             'exam_session_id',
             $session->id
         )
             ->whereIn(
                 'activity',
                 [
+                    'tab_switch',
                     'copy_attempt',
                     'paste_attempt',
                     'fullscreen_exit',
                 ]
             )
             ->selectRaw(
-                'activity, COUNT(*) as total'
+                'activity, COUNT(*) as total, COALESCE(SUM(duration_seconds), 0) as duration_seconds'
             )
             ->groupBy('activity')
-            ->pluck('total', 'activity');
+            ->get();
 
+        $copyAttempts = (int) (
+            $violationLogs
+                ->firstWhere(
+                    'activity',
+                    'copy_attempt'
+                )
+                ?->total ?? 0
+        );
+
+        $pasteAttempts = (int) (
+            $violationLogs
+                ->firstWhere(
+                    'activity',
+                    'paste_attempt'
+                )
+                ?->total ?? 0
+        );
+
+        $fullscreenExits = (int) (
+            $violationLogs
+                ->firstWhere(
+                    'activity',
+                    'fullscreen_exit'
+                )
+                ?->total ?? 0
+        );
+
+        $tabSwitchSeconds = (int) (
+            $violationLogs
+                ->firstWhere(
+                    'activity',
+                    'tab_switch'
+                )
+                ?->duration_seconds ?? 0
+        );
+
+        $fullscreenExitSeconds = (int) (
+            $violationLogs
+                ->firstWhere(
+                    'activity',
+                    'fullscreen_exit'
+                )
+                ?->duration_seconds ?? 0
+        );
+
+        $totalAwaySeconds =
+            $tabSwitchSeconds
+            +
+            $fullscreenExitSeconds;
+
+        /*
+        |--------------------------------------------------------------------------
+        | RESPONSE
+        |--------------------------------------------------------------------------
+        */
         return response()->json([
             'success' => true,
+
             'student' => [
-                'name' => $session->student_name,
-                'score' => $session->score,
-                'percentage' => $session->percentage,
+                'name' =>
+                    $session->student_name,
+
+                'score' =>
+                    $session->score,
+
+                'percentage' =>
+                    $session->percentage,
+
                 'passed' =>
                     (float) $session->percentage >=
                     (float) $session->exam->passing,
-                'started_at' => $session->started_at,
-                'submitted_at' => $session->submitted_at,
-                'time_spent' => $session->time_spent,
+
+                'started_at' =>
+                    $session->started_at,
+
+                'submitted_at' =>
+                    $session->submitted_at,
+
+                'time_spent' =>
+                    $session->time_spent,
+
                 'tab_switches' =>
                     (int) ($session->tab_switches ?? 0),
+
+                'tab_switch_seconds' =>
+                    $tabSwitchSeconds,
+
                 'copy_attempts' =>
-                    (int) ($violationCounts['copy_attempt'] ?? 0),
+                    $copyAttempts,
+
                 'paste_attempts' =>
-                    (int) ($violationCounts['paste_attempt'] ?? 0),
+                    $pasteAttempts,
+
                 'fullscreen_exits' =>
-                    (int) ($violationCounts['fullscreen_exit'] ?? 0),
+                    $fullscreenExits,
+
+                'fullscreen_exit_seconds' =>
+                    $fullscreenExitSeconds,
+
+                'total_away_seconds' =>
+                    $totalAwaySeconds,
+
                 'idle_seconds' =>
                     (int) ($session->idle_seconds ?? 0),
             ],
+
             'exam' => [
-                'id' => $session->exam->id,
-                'title' => $session->exam->title,
-                'passing' => $session->exam->passing,
+                'id' =>
+                    $session->exam->id,
+
+                'title' =>
+                    $session->exam->title,
+
+                'passing' =>
+                    $session->exam->passing,
             ],
-            'answers' => $session->answers->map(
-                function ($answer) {
-                    return [
-                        'id' => $answer->id,
-                        'question_id' => $answer->question_id,
-                        'question' => $answer->question,
-                        'answer' => $answer->answer,
-                        'is_correct' =>
-                            (bool) $answer->is_correct,
-                    ];
-                }
-            )
+
+            'answers' =>
+                $session->answers->map(
+                    function ($answer) {
+                        return [
+                            'id' =>
+                                $answer->id,
+
+                            'question_id' =>
+                                $answer->question_id,
+
+                            'question' =>
+                                $answer->question,
+
+                            'answer' =>
+                                $answer->answer,
+
+                            'is_correct' =>
+                                (bool) $answer->is_correct,
+                        ];
+                    }
+                )
         ]);
     }
 }

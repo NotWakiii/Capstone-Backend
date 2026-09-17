@@ -8,14 +8,16 @@ class ClassStudent extends Model
 {
     protected $fillable = [
         'class_id',
-        'student_name',
+        'student_id',
     ];
 
     public function schoolClass()
     {
-        return $this->belongsTo(
-            SchoolClass::class,
-            'class_id'
-        );
+        return $this->belongsTo(SchoolClass::class, 'class_id');
+    }
+
+    public function student()
+    {
+        return $this->belongsTo(User::class, 'student_id');
     }
 }

@@ -1,41 +1,33 @@
 <?php
-
 namespace App\Models;
-
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
-
 class User extends Authenticatable
 {
-    use HasFactory, Notifiable, HasApiTokens;
-
+    use HasApiTokens, HasFactory, Notifiable;
     protected $fillable = [
         'name',
         'email',
         'password',
         'role',
+        'lrn',
+        'sex',
         'status',
+        'strand_id',
+        'section_id',
     ];
-
     protected $hidden = [
         'password',
         'remember_token',
     ];
-
-    protected function casts(): array
+    public function strand()
     {
-        return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
-        ];
+        return $this->belongsTo(Strand::class);
     }
-    public function schoolClasses()
+    public function section()
     {
-        return $this->hasMany(
-            SchoolClass::class,
-            'faculty_id'
-        );
+        return $this->belongsTo(Section::class);
     }
 }

@@ -125,14 +125,26 @@ public function index()
             'class_ids.*' =>
                 'required|integer|distinct|exists:school_classes,id',
 
-            'subject' =>
-                'required|string|max:255',
-
             'passing' =>
                 'required|integer|min:1|max:100',
 
             'duration' =>
                 'required|integer|min:1',
+
+            'tab_switch_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'fullscreen_exit_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'copy_attempt_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'paste_attempt_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'idle_penalty_seconds' =>
+                'nullable|integer|min:0',
 
             'questions' =>
                 'required|array|min:1',
@@ -163,6 +175,8 @@ public function index()
 
             'questions.*.competency' =>
                 'nullable|string|max:1000',
+            'assessment_type' =>
+                'required|in:quiz,examination',
         ]);
 
 
@@ -180,11 +194,30 @@ public function index()
             'id',
             $validated['class_ids']
         )
-        ->where(
-            'faculty_id',
-            $request->user()->id
-        )
-        ->get();
+            ->where(
+                'faculty_id',
+                $request->user()->id
+            )
+            ->with([
+                'subject',
+                'strand',
+                'sectionData',
+                'schoolYear',
+            ])
+            ->get();
+
+        $subjectIds = $schoolClasses
+            ->pluck('subject_id')
+            ->unique()
+            ->values();
+
+        if ($subjectIds->count() > 1) {
+            return response()->json([
+                'status' => false,
+                'message' =>
+                    'Selected classes must belong to the same subject.',
+            ], 422);
+        }
 
 
         /*
@@ -222,7 +255,6 @@ public function index()
             foreach ($schoolClasses as $schoolClass) {
 
                 $exam = Exam::create([
-
                     'title' =>
                         $validated['title'],
 
@@ -232,18 +264,18 @@ public function index()
                     'class_id' =>
                         $schoolClass->id,
 
-                    /*
-                    * Keep grade and section for compatibility
-                    * with existing I-SPAS pages.
-                    */
+                    'assessment_type' =>
+                        $validated['assessment_type'],
+
                     'grade' =>
                         $schoolClass->grade,
 
                     'section' =>
-                        $schoolClass->section,
+                        $schoolClass->sectionData?->section
+                        ?? $schoolClass->section,
 
                     'subject' =>
-                        $validated['subject'],
+                        $schoolClass->subject?->name,
 
                     'duration' =>
                         $validated['duration'],
@@ -251,10 +283,21 @@ public function index()
                     'passing' =>
                         $validated['passing'],
 
-                    /*
-                    * Each generated exam receives
-                    * its own access code.
-                    */
+                    'tab_switch_penalty_seconds' =>
+                        $validated['tab_switch_penalty_seconds'] ?? null,
+
+                    'fullscreen_exit_penalty_seconds' =>
+                        $validated['fullscreen_exit_penalty_seconds'] ?? null,
+
+                    'copy_attempt_penalty_seconds' =>
+                        $validated['copy_attempt_penalty_seconds'] ?? null,
+
+                    'paste_attempt_penalty_seconds' =>
+                        $validated['paste_attempt_penalty_seconds'] ?? null,
+
+                    'idle_penalty_seconds' =>
+                        $validated['idle_penalty_seconds'] ?? null,
+
                     'access_code' =>
                         strtoupper(
                             Str::random(6)
@@ -264,7 +307,7 @@ public function index()
                         auth()->id(),
 
                     'status' =>
-                        'draft'
+                        'draft',
                 ]);
 
 
@@ -682,25 +725,39 @@ public function restartExam($id)
         string $id
     ) {
 
-        $request->validate([
-
+        $validated = $request->validate([
             'title' =>
                 'required|string|max:255',
 
             'description' =>
                 'nullable|string',
 
+            'assessment_type' =>
+                'required|in:quiz,examination',
+
             'class_id' =>
                 'required|integer|exists:school_classes,id',
-
-            'subject' =>
-                'required|string|max:255',
 
             'duration' =>
                 'required|integer|min:1',
 
             'passing' =>
                 'required|integer|min:1|max:100',
+
+            'tab_switch_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'fullscreen_exit_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'copy_attempt_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'paste_attempt_penalty_seconds' =>
+                'nullable|integer|min:0',
+
+            'idle_penalty_seconds' =>
+                'nullable|integer|min:0',
 
             'questions' =>
                 'required|array|min:1',
@@ -735,15 +792,19 @@ public function restartExam($id)
             ], 404);
         }
 
-        $schoolClass = SchoolClass::where(
+       $schoolClass = SchoolClass::where(
             'id',
             $request->class_id
         )
-        ->where(
-            'faculty_id',
-            auth()->id()
-        )
-        ->first();
+            ->where(
+                'faculty_id',
+                auth()->id()
+            )
+            ->with([
+                'subject',
+                'sectionData',
+            ])
+            ->first();
 
         if (!$schoolClass) {
             return response()->json([
@@ -761,12 +822,14 @@ public function restartExam($id)
              * Update exam details.
              */
             $exam->update([
-
                 'title' =>
                     $request->title,
 
                 'description' =>
                     $request->description,
+
+                'assessment_type' =>
+                    $request->assessment_type,
 
                 'class_id' =>
                     $schoolClass->id,
@@ -775,16 +838,32 @@ public function restartExam($id)
                     $schoolClass->grade,
 
                 'section' =>
-                    $schoolClass->section,
+                    $schoolClass->sectionData?->section
+                    ?? $schoolClass->section,
 
                 'subject' =>
-                    $request->subject,
+                    $schoolClass->subject?->name,
 
                 'duration' =>
                     $request->duration,
 
                 'passing' =>
                     $request->passing,
+
+                'tab_switch_penalty_seconds' =>
+                    $validated['tab_switch_penalty_seconds'] ?? null,
+
+                'fullscreen_exit_penalty_seconds' =>
+                    $validated['fullscreen_exit_penalty_seconds'] ?? null,
+
+                'copy_attempt_penalty_seconds' =>
+                    $validated['copy_attempt_penalty_seconds'] ?? null,
+
+                'paste_attempt_penalty_seconds' =>
+                    $validated['paste_attempt_penalty_seconds'] ?? null,
+
+                'idle_penalty_seconds' =>
+                    $validated['idle_penalty_seconds'] ?? null,
             ]);
 
 
@@ -964,26 +1043,31 @@ public function restartExam($id)
 
     public function publish($id)
     {
-        $exam =
-            $this->findAccessibleExam(
-                $id
-            );
-
+        $exam = $this->findAccessibleExam($id);
 
         if (!$exam) {
-
             return response()->json([
                 'status' => false,
-
-                'message' =>
-                    'Exam not found or access denied.'
+                'message' => 'Exam not found or access denied.'
             ], 404);
         }
 
+        if ($exam->status !== 'draft') {
+            return response()->json([
+                'status' => false,
+                'message' => 'Only a draft exam can be published.'
+            ], 422);
+        }
+
+        if ($exam->questions()->count() === 0) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Add at least one question before publishing.'
+            ], 422);
+        }
 
         $exam->update([
-            'status' =>
-                'published'
+            'status' => 'published'
         ]);
 
         AuditLogger::log(
@@ -992,15 +1076,10 @@ public function restartExam($id)
             'Published examination: ' . $exam->title
         );
 
-
         return response()->json([
             'status' => true,
-
-            'message' =>
-                'Exam published successfully',
-
-            'data' =>
-                $exam
+            'message' => 'Exam published successfully.',
+            'data' => $exam->fresh()
         ]);
     }
 

@@ -8,16 +8,34 @@ class SchoolClass extends Model
 {
     protected $fillable = [
         'faculty_id',
+        'school_year_id',
+        'semester',
         'grade',
+        'strand_id',
+        'section_id',
+        'subject_id',
         'section',
     ];
 
     public function faculty()
     {
-        return $this->belongsTo(
-            User::class,
-            'faculty_id'
-        );
+        return $this->belongsTo(User::class, 'faculty_id');
+    }
+    public function schoolYear()
+    {
+        return $this->belongsTo(SchoolYear::class);
+    }
+    public function strand()
+    {
+        return $this->belongsTo(Strand::class);
+    }
+    public function sectionData()
+    {
+        return $this->belongsTo(Section::class, 'section_id');
+    }
+    public function subject()
+    {
+        return $this->belongsTo(Subject::class);
     }
 
     public function students()

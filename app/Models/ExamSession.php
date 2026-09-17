@@ -21,6 +21,7 @@ class ExamSession extends Model
         'last_seen_at',
         'time_spent',
         'status',
+        'penalty_seconds',
     ];
 
     protected $casts = [
@@ -36,6 +37,7 @@ class ExamSession extends Model
         'time_remaining' => 'integer',
         'time_spent' => 'integer',
         'percentage' => 'decimal:2',
+        'penalty_seconds' => 'integer',
     ];
 
     public function exam()

@@ -1,65 +1,39 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Models;
 
-use App\Models\MonitorLog;
-use Illuminate\Http\Request;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 
-class MonitorLogController extends Controller
+class MonitorLog extends Model
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    use HasFactory;
+
+    protected $fillable = [
+        'exam_session_id',
+        'student_id',
+        'activity',
+        'details',
+        'duration_seconds',
+    ];
+
+    protected $casts = [
+        'duration_seconds' => 'integer',
+    ];
+
+    public function examSession()
     {
-        //
+        return $this->belongsTo(
+            ExamSession::class,
+            'exam_session_id'
+        );
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function student()
     {
-        //
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
-    {
-        //
-    }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(MonitorLog $monitorLog)
-    {
-        //
-    }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(MonitorLog $monitorLog)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, MonitorLog $monitorLog)
-    {
-        //
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(MonitorLog $monitorLog)
-    {
-        //
+        return $this->belongsTo(
+            User::class,
+            'student_id'
+        );
     }
 }

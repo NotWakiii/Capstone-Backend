@@ -7,6 +7,8 @@ use App\Models\ExamSession;
 use App\Models\Question;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\MonitorLog;
+use Illuminate\Http\Request;
+
 
 class ResultController extends Controller
 {
@@ -626,12 +628,13 @@ class ResultController extends Controller
             $sessionIds
         )
             ->whereIn('activity', [
+                'tab_switch',
                 'copy_attempt',
                 'paste_attempt',
                 'fullscreen_exit'
             ])
             ->selectRaw(
-                'exam_session_id, activity, COUNT(*) as total'
+                'exam_session_id, activity, COUNT(*) as total, COALESCE(SUM(duration_seconds), 0) as duration_seconds'
             )
             ->groupBy(
                 'exam_session_id',
@@ -720,6 +723,25 @@ class ResultController extends Controller
                         ?->total
                     ?? 0
                 );
+                $tabSwitchSeconds = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'tab_switch'
+                        )
+                        ?->duration_seconds
+                    ?? 0
+                );
+                $fullscreenExitSeconds = (int) (
+                    $logs
+                        ->firstWhere(
+                            'activity',
+                            'fullscreen_exit'
+                        )
+                        ?->duration_seconds
+                    ?? 0
+                );
+                $totalAwaySeconds = $tabSwitchSeconds + $fullscreenExitSeconds;
                 /*
                 |--------------------------------------------------------------------------
                 | PASSED / FAILED
@@ -753,6 +775,12 @@ class ResultController extends Controller
                         $pasteAttempts,
                     'fullscreen_exits' =>
                         $fullscreenExits,
+                    'tab_switch_seconds' =>
+                        $tabSwitchSeconds,
+                    'fullscreen_exit_seconds' =>
+                        $fullscreenExitSeconds,
+                    'total_away_seconds' =>
+                        $totalAwaySeconds,
                     'idle_seconds' =>
                         (int) (
                             $session->idle_seconds ?? 0
@@ -1825,5 +1853,43 @@ class ResultController extends Controller
             .
             '-Item-Analysis.pdf'
         );
+    }
+    public function studentResultByExam(Request $request, $examId)
+    {
+        $student = $request->user();
+
+        if (!$student) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Unauthenticated.'
+            ], 401);
+        }
+
+        $studentName =
+            $student->name
+            ?? $student->student_name
+            ?? null;
+
+        if (!$studentName) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Student information could not be identified.'
+            ], 422);
+        }
+
+        $session = ExamSession::where('exam_id', $examId)
+            ->where('student_name', $studentName)
+            ->where('status', 'submitted')
+            ->latest('submitted_at')
+            ->first();
+
+        if (!$session) {
+            return response()->json([
+                'status' => false,
+                'message' => 'You do not have a submitted result for this examination.'
+            ], 404);
+        }
+
+        return $this->studentResult($session->id);
     }
 }

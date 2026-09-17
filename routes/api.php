@@ -12,6 +12,7 @@ use App\Http\Controllers\ResultController;
 use App\Http\Controllers\ExamResultController;
 
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\TestBankController;
 
 /*
 |--------------------------------------------------------------------------
@@ -43,24 +44,6 @@ Route::get(
     '/student/exams/{id}/status',
     [StudentExamController::class, 'examStatus']
 );
-
-Route::post(
-    '/join-exam',
-    [StudentExamController::class, 'joinExam']
-);
-Route::post(
-    '/exam-students',
-    [
-        StudentExamController::class,
-        'examStudents'
-    ]
-);
-
-Route::get(
-    '/student/exams/{id}/status',
-    [StudentExamController::class, 'examStatus']
-);
-
 Route::get(
     '/student/exams/{id}/lobby',
     [StudentExamController::class, 'studentLobby']
@@ -285,6 +268,12 @@ Route::middleware('auth:sanctum')->group(function () {
         '/faculty/exam-results/{examId}',
         [ExamResultController::class, 'show']
     );
+    Route::get('/faculty/test-bank', [TestBankController::class, 'index']);
+    Route::post('/faculty/test-bank', [TestBankController::class, 'store']);
+    Route::post('/faculty/test-bank/bulk', [TestBankController::class, 'storeBulk']);
+    Route::get('/faculty/test-bank/{id}', [TestBankController::class, 'show']);
+    Route::put('/faculty/test-bank/{id}', [TestBankController::class, 'update']);
+    Route::delete('/faculty/test-bank/{id}', [TestBankController::class, 'destroy']);
 
 });
 
@@ -293,16 +282,20 @@ use App\Http\Controllers\AdminFacultyController;
 use App\Http\Controllers\AdminExamController;
 use App\Http\Controllers\AdminResultController;
 use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\SchoolYearController;
+use App\Http\Controllers\StrandController;
+use App\Http\Controllers\SectionController;
+use App\Http\Controllers\SubjectController;
+use App\Http\Controllers\CurriculumController;
+use App\Http\Controllers\StudentManagementController;
+use App\Http\Controllers\AdminDashboardController;
+
 
 Route::middleware([
     'auth:sanctum',
     'admin'
 ])->prefix('admin')->group(function () {
-
-    Route::get(
-        '/dashboard',
-        [AdminController::class, 'dashboard']
-    );
+    Route::get('/dashboard', [AdminDashboardController::class, 'index']);
 
     Route::get(
         '/faculty',
@@ -324,6 +317,11 @@ Route::middleware([
         [AdminFacultyController::class, 'destroy']
     );
 
+    Route::patch(
+        '/faculty/{id}/status',
+        [AdminFacultyController::class, 'updateStatus']
+    );
+
     Route::get(
         '/exams',
         [AdminExamController::class, 'index']
@@ -338,60 +336,243 @@ Route::middleware([
         '/results/{examId}',
         [AdminResultController::class, 'show']
     );
-    Route::patch(
-        '/faculty/{id}/status',
-        [AdminFacultyController::class, 'updateStatus']
-    );
-    //helper route for testing audit logging
+
     Route::get(
         '/audit-logs',
         [AuditLogController::class, 'index']
     );
 
-});
-//class management routes
-use App\Http\Controllers\ClassManagementController;
+    /*
+    |--------------------------------------------------------------------------
+    | SCHOOL YEAR MANAGEMENT
+    |--------------------------------------------------------------------------
+    */
 
+    Route::get(
+        '/school-years',
+        [SchoolYearController::class, 'index']
+    );
+
+    Route::post(
+        '/school-years',
+        [SchoolYearController::class, 'store']
+    );
+
+    Route::get(
+        '/school-years/{id}',
+        [SchoolYearController::class, 'show']
+    );
+
+    Route::put(
+        '/school-years/{id}',
+        [SchoolYearController::class, 'update']
+    );
+
+    Route::delete(
+        '/school-years/{id}',
+        [SchoolYearController::class, 'destroy']
+    );
+    /*
+    |--------------------------------------------------------------------------
+    | STRAND MANAGEMENT
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get(
+        '/strands',
+        [StrandController::class, 'index']
+    );
+
+    Route::post(
+        '/strands',
+        [StrandController::class, 'store']
+    );
+
+    Route::get(
+        '/strands/{id}',
+        [StrandController::class, 'show']
+    );
+
+    Route::put(
+        '/strands/{id}',
+        [StrandController::class, 'update']
+    );
+
+    Route::delete(
+        '/strands/{id}',
+        [StrandController::class, 'destroy']
+    );
+    /*
+    |--------------------------------------------------------------------------
+    | SECTION MANAGEMENT
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get(
+        '/sections',
+        [SectionController::class, 'index']
+    );
+
+    Route::post(
+        '/sections',
+        [SectionController::class, 'store']
+    );
+
+    Route::get(
+        '/sections/{id}',
+        [SectionController::class, 'show']
+    );
+
+    Route::put(
+        '/sections/{id}',
+        [SectionController::class, 'update']
+    );
+
+    Route::delete(
+        '/sections/{id}',
+        [SectionController::class, 'destroy']
+    );
+    /*
+    |--------------------------------------------------------------------------
+    | SUBJECT MANAGEMENT
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get(
+        '/subjects',
+        [SubjectController::class, 'index']
+    );
+
+    Route::post(
+        '/subjects',
+        [SubjectController::class, 'store']
+    );
+
+    Route::get(
+        '/subjects/{id}',
+        [SubjectController::class, 'show']
+    );
+
+    Route::put(
+        '/subjects/{id}',
+        [SubjectController::class, 'update']
+    );
+
+    Route::delete(
+        '/subjects/{id}',
+        [SubjectController::class, 'destroy']
+    );
+    Route::get('/curricula', [
+        CurriculumController::class,
+        'index'
+    ]);
+
+    Route::post('/curricula', [
+        CurriculumController::class,
+        'store'
+    ]);
+
+    Route::get('/curricula/{id}', [
+        CurriculumController::class,
+        'show'
+    ]);
+
+    Route::put('/curricula/{id}', [
+        CurriculumController::class,
+        'update'
+    ]);
+
+    Route::delete('/curricula/{id}', [
+        CurriculumController::class,
+        'destroy'
+    ]);
+    //STUDENT MANAGEMENT
+    Route::get('/students', [StudentManagementController::class, 'index']);
+    Route::post('/students', [StudentManagementController::class, 'store']);
+    Route::post('/students/import', [StudentManagementController::class, 'import']);
+    Route::get('/students/{id}', [StudentManagementController::class, 'show']);
+    Route::put('/students/{id}', [StudentManagementController::class, 'update']);
+    Route::delete('/students/{id}', [StudentManagementController::class, 'destroy']);
+
+});
+use App\Http\Controllers\FacultyClassController;
 Route::middleware('auth:sanctum')
     ->prefix('faculty')
     ->group(function () {
 
+        Route::get('/classes/options', [
+            FacultyClassController::class,
+            'options'
+        ]);
+
+        Route::get('/classes', [
+            FacultyClassController::class,
+            'index'
+        ]);
+
+        Route::post('/classes', [
+            FacultyClassController::class,
+            'store'
+        ]);
+
+        Route::get('/classes/{id}', [
+            FacultyClassController::class,
+            'show'
+        ]);
+
+        Route::put('/classes/{id}', [
+            FacultyClassController::class,
+            'update'
+        ]);
+
+        Route::delete('/classes/{id}', [
+            FacultyClassController::class,
+            'destroy'
+        ]);
+        Route::get('/classes/{id}/students', [FacultyClassController::class, 'students']);
+        Route::post('/classes/{id}/students', [FacultyClassController::class, 'storeStudent']);
+        Route::delete('/classes/{id}/students/{studentId}', [FacultyClassController::class, 'destroyStudent']);
+        Route::put('/students/bulk-status', [StudentManagementController::class, 'bulkUpdateStatus']);
         Route::get(
-            '/classes',
-            [ClassManagementController::class, 'index']
+            '/classes/{id}/assessments',
+            [FacultyClassController::class, 'assessments']
         );
+    });
+use App\Http\Controllers\StudentAuthController;
+use App\Http\Controllers\StudentClassController;
+use App\Http\Controllers\AssessmentFeedbackController;
 
-        Route::post(
-            '/classes',
-            [ClassManagementController::class, 'store']
-        );
+Route::prefix('student')->group(function () {
+    Route::post('/login', [StudentAuthController::class, 'login']);
 
-        Route::put(
-            '/classes/{id}',
-            [ClassManagementController::class, 'update']
-        );
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::get('/me', [StudentAuthController::class, 'me']);
+        Route::post('/logout', [StudentAuthController::class, 'logout']);
 
-        Route::delete(
-            '/classes/{id}',
-            [ClassManagementController::class, 'destroy']
-        );
+        Route::get('/classes', [StudentClassController::class, 'index']);
+        Route::get('/classes/{id}', [StudentClassController::class, 'show']);
 
+        Route::post('/exam-students', [
+            StudentExamController::class,
+            'examStudents'
+        ]);
 
-        // STUDENTS
+        Route::post('/join-exam', [
+            StudentExamController::class,
+            'joinExam'
+        ]);
 
-        Route::post(
-            '/classes/{id}/students',
-            [ClassManagementController::class, 'addStudent']
-        );
+        Route::post('/feedback', [
+            AssessmentFeedbackController::class,
+            'studentStore'
+        ]);
+        Route::get('/results/{examId}', [ResultController::class, 'studentResultByExam']);
+    });
+});
 
-        Route::put(
-            '/classes/{classId}/students/{studentId}',
-            [ClassManagementController::class, 'updateStudent']
-        );
-
-        Route::delete(
-            '/classes/{classId}/students/{studentId}',
-            [ClassManagementController::class, 'removeStudent']
-        );
-
+Route::middleware('auth:sanctum')
+    ->prefix('faculty')
+    ->group(function () {
+        Route::get('/feedback', [AssessmentFeedbackController::class, 'facultyIndex']);
+        Route::put('/feedback/{id}/read', [AssessmentFeedbackController::class, 'markRead']);
     });
