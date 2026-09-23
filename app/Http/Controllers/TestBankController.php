@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\TestBankQuestion;
 use App\Models\TestBankQuestionOption;
+use App\Models\SchoolClass;
+use App\Models\Question;
+use App\Models\StudentAnswer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
-use App\Models\SchoolClass;
 
 class TestBankController extends Controller
 {
@@ -17,32 +19,129 @@ class TestBankController extends Controller
     public function index(Request $request)
     {
         $this->authorizeFaculty($request);
+
         $facultyId = $request->user()->id;
 
-        $query = TestBankQuestion::with(['options', 'subject'])
+        $query = TestBankQuestion::with([
+            'options',
+            'subject',
+            'classes.subject',
+        ])
             ->where('faculty_id', $facultyId)
             ->latest();
 
+        /*
+        |--------------------------------------------------------------------------
+        | Filter by assigned Class
+        |--------------------------------------------------------------------------
+        */
+        if ($request->filled('class_id')) {
+            $classId = (int) $request->class_id;
+
+            $this->authorizeFacultyOwnsClass(
+                $request,
+                $classId
+            );
+
+            $query->whereHas(
+                'classes',
+                function ($q) use ($classId) {
+                    $q->where(
+                        'school_classes.id',
+                        $classId
+                    );
+                }
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Filter by Subject
+        |--------------------------------------------------------------------------
+        */
         if ($request->filled('subject_id')) {
-            $query->where('subject_id', $request->subject_id);
+            $query->where(
+                'subject_id',
+                $request->subject_id
+            );
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Filter by Question Type
+        |--------------------------------------------------------------------------
+        */
         if ($request->filled('question_type')) {
-            $query->where('question_type', $request->question_type);
+            $query->where(
+                'question_type',
+                $request->question_type
+            );
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Search
+        |--------------------------------------------------------------------------
+        */
         if ($request->filled('search')) {
             $search = trim($request->search);
 
             $query->where(function ($q) use ($search) {
-                $q->where('question', 'like', "%{$search}%")
-                    ->orWhere('competency', 'like', "%{$search}%");
+                $q->where(
+                    'question',
+                    'like',
+                    "%{$search}%"
+                )
+                    ->orWhere(
+                        'competency',
+                        'like',
+                        "%{$search}%"
+                    );
             });
         }
 
+        $questions = $query->get();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Question Performance Analytics
+        |--------------------------------------------------------------------------
+        */
+        $questions->each(function ($question) {
+            $examQuestionIds = Question::where(
+                'test_bank_question_id',
+                $question->id
+            )->pluck('id');
+
+            $totalAnswers = StudentAnswer::whereIn(
+                'question_id',
+                $examQuestionIds
+            )->count();
+
+            $correctAnswers = StudentAnswer::whereIn(
+                'question_id',
+                $examQuestionIds
+            )
+                ->where('is_correct', true)
+                ->count();
+
+            $correctPercentage = $totalAnswers > 0
+                ? round(
+                    ($correctAnswers / $totalAnswers) * 100,
+                    2
+                )
+                : 0;
+
+            $question->statistics = [
+                'total_answers' => $totalAnswers,
+                'correct_answers' => $correctAnswers,
+                'correct_percentage' => $correctPercentage,
+            ];
+        });
+
         return response()->json([
             'status' => true,
-            'data' => $query->get()
+            'data' => $questions,
         ]);
     }
 
@@ -51,63 +150,197 @@ class TestBankController extends Controller
      */
     public function store(Request $request)
     {
+        $this->authorizeFaculty($request);
+
         $validated = $request->validate([
-            'subject_id' => ['required', 'integer', 'exists:subjects,id'],
-            'question' => ['required', 'string'],
+            'subject_id' => [
+                'required',
+                'integer',
+                'exists:subjects,id',
+            ],
+
+            'class_ids' => [
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'class_ids.*' => [
+                'required',
+                'integer',
+                'distinct',
+                'exists:school_classes,id',
+            ],
+
+            'question' => [
+                'required',
+                'string',
+            ],
+
             'question_type' => [
                 'required',
                 Rule::in([
                     'multiple_choice',
                     'true_false',
-                    'identification'
-                ])
+                    'identification',
+                ]),
             ],
-            'competency' => ['nullable', 'string'],
-            'answer' => ['nullable', 'string'],
-            'points' => ['nullable', 'integer', 'min:1'],
-            'options' => ['nullable', 'array'],
-            'options.*.option_text' => ['required_with:options', 'string'],
-            'options.*.is_correct' => ['required_with:options', 'boolean'],
+
+            'competency' => [
+                'nullable',
+                'string',
+            ],
+
+            'answer' => [
+                'nullable',
+                'string',
+            ],
+
+            'points' => [
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            'options' => [
+                'nullable',
+                'array',
+            ],
+
+            'options.*.option_text' => [
+                'required_with:options',
+                'string',
+            ],
+
+            'options.*.is_correct' => [
+                'required_with:options',
+                'boolean',
+            ],
         ]);
-        $this->authorizeFacultySubject(
-            $request,
-            (int) $validated['subject_id']
+
+        $facultyId = $request->user()->id;
+        $subjectId = (int) $validated['subject_id'];
+
+        $classIds = array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    $validated['class_ids']
+                )
+            )
         );
 
-        $facultyId = $request->user()->id;
+        /*
+        |--------------------------------------------------------------------------
+        | Verify all selected classes
+        |--------------------------------------------------------------------------
+        |
+        | All classes must:
+        | - belong to logged-in faculty
+        | - belong to selected subject
+        |
+        */
+        $this->authorizeFacultyClasses(
+            $request,
+            $classIds,
+            $subjectId
+        );
 
-        $facultyId = $request->user()->id;
-        $questionText = trim($validated['question']);
+        $questionText = trim(
+            $validated['question']
+        );
 
-        $existing = TestBankQuestion::where('faculty_id', $facultyId)
-            ->where('subject_id', $validated['subject_id'])
-            ->where('question_type', $validated['question_type'])
-            ->where('question', $questionText)
+        /*
+        |--------------------------------------------------------------------------
+        | Check if same question already exists
+        |--------------------------------------------------------------------------
+        |
+        | Question is stored ONCE.
+        | Classes are assignments through the pivot table.
+        |
+        */
+        $existing = TestBankQuestion::where(
+            'faculty_id',
+            $facultyId
+        )
+            ->where(
+                'subject_id',
+                $subjectId
+            )
+            ->where(
+                'question_type',
+                $validated['question_type']
+            )
+            ->where(
+                'question',
+                $questionText
+            )
             ->first();
 
+        /*
+        |--------------------------------------------------------------------------
+        | Existing Question
+        |--------------------------------------------------------------------------
+        |
+        | Instead of creating a duplicate question, add the selected classes
+        | to its existing class assignments.
+        |
+        */
         if ($existing) {
+            DB::transaction(function () use (
+                $existing,
+                $classIds
+            ) {
+                $existing->classes()->syncWithoutDetaching(
+                    $classIds
+                );
+            });
+
             return response()->json([
                 'status' => true,
                 'already_exists' => true,
-                'message' => 'Question is already in the Test Bank.',
-                'data' => $existing->load('options')
+                'message' => 'Question already exists. Selected class assignments were added.',
+                'data' => $existing
+                    ->fresh()
+                    ->load([
+                        'options',
+                        'subject',
+                        'classes.subject',
+                    ]),
             ]);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Create Question
+        |--------------------------------------------------------------------------
+        */
         $question = DB::transaction(function () use (
             $validated,
             $facultyId,
+            $subjectId,
+            $classIds,
             $questionText
         ) {
             $question = TestBankQuestion::create([
                 'faculty_id' => $facultyId,
-                'subject_id' => $validated['subject_id'],
+                'subject_id' => $subjectId,
                 'question' => $questionText,
                 'question_type' => $validated['question_type'],
                 'competency' => $validated['competency'] ?? null,
                 'answer' => $validated['answer'] ?? null,
                 'points' => $validated['points'] ?? 1,
+                'is_active' => true,
             ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Assign question to selected classes
+            |--------------------------------------------------------------------------
+            */
+            $question->classes()->sync(
+                $classIds
+            );
 
             $this->saveOptions(
                 $question,
@@ -122,7 +355,11 @@ class TestBankController extends Controller
             'status' => true,
             'already_exists' => false,
             'message' => 'Question added to Test Bank successfully.',
-            'data' => $question->load(['options', 'subject'])
+            'data' => $question->load([
+                'options',
+                'subject',
+                'classes.subject',
+            ]),
         ], 201);
     }
 
@@ -131,68 +368,170 @@ class TestBankController extends Controller
      */
     public function storeBulk(Request $request)
     {
+        $this->authorizeFaculty($request);
+
         $validated = $request->validate([
-            'subject_id' => ['required', 'integer', 'exists:subjects,id'],
-            'questions' => ['required', 'array', 'min:1'],
-            'questions.*.question' => ['required', 'string'],
+            'subject_id' => [
+                'required',
+                'integer',
+                'exists:subjects,id',
+            ],
+
+            'class_ids' => [
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'class_ids.*' => [
+                'required',
+                'integer',
+                'distinct',
+                'exists:school_classes,id',
+            ],
+
+            'questions' => [
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'questions.*.question' => [
+                'required',
+                'string',
+            ],
+
             'questions.*.question_type' => [
                 'required',
                 Rule::in([
                     'multiple_choice',
                     'true_false',
-                    'identification'
-                ])
+                    'identification',
+                ]),
             ],
-            'questions.*.competency' => ['nullable', 'string'],
-            'questions.*.answer' => ['nullable', 'string'],
-            'questions.*.points' => ['nullable', 'integer', 'min:1'],
-            'questions.*.options' => ['nullable', 'array'],
-            'questions.*.options.*.option_text' => ['required_with:questions.*.options', 'string'],
-            'questions.*.options.*.is_correct' => ['required_with:questions.*.options', 'boolean'],
+
+            'questions.*.competency' => [
+                'nullable',
+                'string',
+            ],
+
+            'questions.*.answer' => [
+                'nullable',
+                'string',
+            ],
+
+            'questions.*.points' => [
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            'questions.*.options' => [
+                'nullable',
+                'array',
+            ],
+
+            'questions.*.options.*.option_text' => [
+                'required_with:questions.*.options',
+                'string',
+            ],
+
+            'questions.*.options.*.is_correct' => [
+                'required_with:questions.*.options',
+                'boolean',
+            ],
         ]);
-        $this->authorizeFacultySubject(
-            $request,
-            (int) $validated['subject_id']
+
+        $facultyId = $request->user()->id;
+        $subjectId = (int) $validated['subject_id'];
+
+        $classIds = array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    $validated['class_ids']
+                )
+            )
         );
 
-        $facultyId = $request->user()->id;
+        $this->authorizeFacultyClasses(
+            $request,
+            $classIds,
+            $subjectId
+        );
 
-        $facultyId = $request->user()->id;
-        $subjectId = $validated['subject_id'];
         $added = 0;
-        $skipped = 0;
+        $existingCount = 0;
+
         $addedQuestions = [];
-        $skippedQuestions = [];
+        $existingQuestions = [];
 
         DB::transaction(function () use (
             $validated,
             $facultyId,
             $subjectId,
+            $classIds,
             &$added,
-            &$skipped,
+            &$existingCount,
             &$addedQuestions,
-            &$skippedQuestions
+            &$existingQuestions
         ) {
-            foreach ($validated['questions'] as $item) {
-                $questionText = trim($item['question']);
+            foreach (
+                $validated['questions']
+                as $item
+            ) {
+                $questionText = trim(
+                    $item['question']
+                );
 
-                $existing = TestBankQuestion::where('faculty_id', $facultyId)
-                    ->where('subject_id', $subjectId)
-                    ->where('question_type', $item['question_type'])
-                    ->where('question', $questionText)
+                /*
+                |--------------------------------------------------------------------------
+                | Check existing Test Bank question
+                |--------------------------------------------------------------------------
+                */
+                $existing = TestBankQuestion::where(
+                    'faculty_id',
+                    $facultyId
+                )
+                    ->where(
+                        'subject_id',
+                        $subjectId
+                    )
+                    ->where(
+                        'question_type',
+                        $item['question_type']
+                    )
+                    ->where(
+                        'question',
+                        $questionText
+                    )
                     ->first();
 
                 if ($existing) {
-                    $skipped++;
+                    /*
+                    | Question already exists.
+                    | Just add new class assignments.
+                    */
+                    $existing->classes()
+                        ->syncWithoutDetaching(
+                            $classIds
+                        );
 
-                    $skippedQuestions[] = [
+                    $existingCount++;
+
+                    $existingQuestions[] = [
                         'question' => $questionText,
-                        'test_bank_question_id' => $existing->id
+                        'test_bank_question_id' => $existing->id,
                     ];
 
                     continue;
                 }
 
+                /*
+                |--------------------------------------------------------------------------
+                | Create New Question
+                |--------------------------------------------------------------------------
+                */
                 $question = TestBankQuestion::create([
                     'faculty_id' => $facultyId,
                     'subject_id' => $subjectId,
@@ -201,7 +540,17 @@ class TestBankController extends Controller
                     'competency' => $item['competency'] ?? null,
                     'answer' => $item['answer'] ?? null,
                     'points' => $item['points'] ?? 1,
+                    'is_active' => true,
                 ]);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Assign to selected classes
+                |--------------------------------------------------------------------------
+                */
+                $question->classes()->sync(
+                    $classIds
+                );
 
                 $this->saveOptions(
                     $question,
@@ -213,51 +562,76 @@ class TestBankController extends Controller
 
                 $addedQuestions[] = [
                     'question' => $questionText,
-                    'test_bank_question_id' => $question->id
+                    'test_bank_question_id' => $question->id,
                 ];
             }
         });
 
         return response()->json([
             'status' => true,
-            'message' => $added . ' question(s) added to Test Bank. ' .
-                $skipped . ' existing question(s) skipped.',
+
+            'message' =>
+                $added .
+                ' question(s) added. ' .
+                $existingCount .
+                ' existing question(s) received the selected class assignments.',
+
             'added' => $added,
-            'skipped' => $skipped,
-            'total' => count($validated['questions']),
-            'added_questions' => $addedQuestions,
-            'skipped_questions' => $skippedQuestions
+            'existing' => $existingCount,
+            'total' => count(
+                $validated['questions']
+            ),
+
+            'added_questions' =>
+                $addedQuestions,
+
+            'existing_questions' =>
+                $existingQuestions,
         ]);
     }
 
     /**
      * Display one Test Bank question.
      */
-    public function show(Request $request, string $id)
-    {
-        $question = TestBankQuestion::with(['options', 'subject'])
-            ->where('faculty_id', $request->user()->id)
+    public function show(
+        Request $request,
+        string $id
+    ) {
+        $this->authorizeFaculty($request);
+
+        $question = TestBankQuestion::with([
+            'options',
+            'subject',
+            'classes.subject',
+        ])
+            ->where(
+                'faculty_id',
+                $request->user()->id
+            )
             ->find($id);
 
         if (!$question) {
             return response()->json([
                 'status' => false,
-                'message' => 'Test Bank question not found.'
+                'message' => 'Test Bank question not found.',
             ], 404);
         }
 
         return response()->json([
             'status' => true,
-            'data' => $question
+            'data' => $question,
         ]);
-        $this->authorizeFaculty($request);
     }
 
     /**
      * Update a Test Bank question.
      */
-    public function update(Request $request, string $id)
-    {
+    public function update(
+        Request $request,
+        string $id
+    ) {
+        $this->authorizeFaculty($request);
+
         $question = TestBankQuestion::where(
             'faculty_id',
             $request->user()->id
@@ -266,59 +640,151 @@ class TestBankController extends Controller
         if (!$question) {
             return response()->json([
                 'status' => false,
-                'message' => 'Test Bank question not found.'
+                'message' => 'Test Bank question not found.',
             ], 404);
         }
 
         $validated = $request->validate([
-            'subject_id' => ['required', 'integer', 'exists:subjects,id'],
-            'question' => ['required', 'string'],
+            'subject_id' => [
+                'required',
+                'integer',
+                'exists:subjects,id',
+            ],
+
+            'class_ids' => [
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'class_ids.*' => [
+                'required',
+                'integer',
+                'distinct',
+                'exists:school_classes,id',
+            ],
+
+            'question' => [
+                'required',
+                'string',
+            ],
+
             'question_type' => [
                 'required',
                 Rule::in([
                     'multiple_choice',
                     'true_false',
-                    'identification'
-                ])
+                    'identification',
+                ]),
             ],
-            'competency' => ['nullable', 'string'],
-            'answer' => ['nullable', 'string'],
-            'points' => ['nullable', 'integer', 'min:1'],
-            'options' => ['nullable', 'array'],
-            'options.*.option_text' => ['required_with:options', 'string'],
-            'options.*.is_correct' => ['required_with:options', 'boolean'],
+
+            'competency' => [
+                'nullable',
+                'string',
+            ],
+
+            'answer' => [
+                'nullable',
+                'string',
+            ],
+
+            'points' => [
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            'options' => [
+                'nullable',
+                'array',
+            ],
+
+            'options.*.option_text' => [
+                'required_with:options',
+                'string',
+            ],
+
+            'options.*.is_correct' => [
+                'required_with:options',
+                'boolean',
+            ],
         ]);
-        $this->authorizeFacultySubject(
-            $request,
-            (int) $validated['subject_id']
+
+        $subjectId = (int) $validated['subject_id'];
+
+        $classIds = array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    $validated['class_ids']
+                )
+            )
         );
 
-        $questionText = trim($validated['question']);
+        /*
+        |--------------------------------------------------------------------------
+        | Verify selected classes
+        |--------------------------------------------------------------------------
+        */
+        $this->authorizeFacultyClasses(
+            $request,
+            $classIds,
+            $subjectId
+        );
 
+        $questionText = trim(
+            $validated['question']
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Duplicate Check
+        |--------------------------------------------------------------------------
+        */
         $duplicate = TestBankQuestion::where(
-                'faculty_id',
-                $request->user()->id
+            'faculty_id',
+            $request->user()->id
+        )
+            ->where(
+                'subject_id',
+                $subjectId
             )
-            ->where('subject_id', $validated['subject_id'])
-            ->where('question_type', $validated['question_type'])
-            ->where('question', $questionText)
-            ->where('id', '!=', $question->id)
+            ->where(
+                'question_type',
+                $validated['question_type']
+            )
+            ->where(
+                'question',
+                $questionText
+            )
+            ->where(
+                'id',
+                '!=',
+                $question->id
+            )
             ->exists();
 
         if ($duplicate) {
             return response()->json([
                 'status' => false,
-                'message' => 'This question already exists in the Test Bank.'
+                'message' => 'This question already exists in your Test Bank for this subject.',
             ], 422);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Update Question
+        |--------------------------------------------------------------------------
+        */
         DB::transaction(function () use (
             $question,
             $validated,
+            $subjectId,
+            $classIds,
             $questionText
         ) {
             $question->update([
-                'subject_id' => $validated['subject_id'],
+                'subject_id' => $subjectId,
                 'question' => $questionText,
                 'question_type' => $validated['question_type'],
                 'competency' => $validated['competency'] ?? null,
@@ -326,6 +792,23 @@ class TestBankController extends Controller
                 'points' => $validated['points'] ?? 1,
             ]);
 
+            /*
+            |--------------------------------------------------------------------------
+            | Update class assignments
+            |--------------------------------------------------------------------------
+            |
+            | sync() adds selected classes and removes unselected classes.
+            |
+            */
+            $question->classes()->sync(
+                $classIds
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Replace Options
+            |--------------------------------------------------------------------------
+            */
             TestBankQuestionOption::where(
                 'test_bank_question_id',
                 $question->id
@@ -341,34 +824,14 @@ class TestBankController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Test Bank question updated successfully.',
-            'data' => $question->fresh()->load(['options', 'subject'])
+            'data' => $question
+                ->fresh()
+                ->load([
+                    'options',
+                    'subject',
+                    'classes.subject',
+                ]),
         ]);
-    }
-
-    /**
-     * Delete a Test Bank question.
-     */
-    public function destroy(Request $request, string $id)
-    {
-        $question = TestBankQuestion::where(
-            'faculty_id',
-            $request->user()->id
-        )->find($id);
-
-        if (!$question) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Test Bank question not found.'
-            ], 404);
-        }
-
-        $question->delete();
-
-        return response()->json([
-            'status' => true,
-            'message' => 'Question deleted from Test Bank successfully.'
-        ]);
-        $this->authorizeFaculty($request);
     }
 
     /**
@@ -379,43 +842,192 @@ class TestBankController extends Controller
         string $questionType,
         array $options
     ): void {
-        if (!in_array(
-            $questionType,
-            ['multiple_choice', 'true_false']
-        )) {
+        if (
+            !in_array(
+                $questionType,
+                [
+                    'multiple_choice',
+                    'true_false',
+                ]
+            )
+        ) {
             return;
         }
 
         foreach ($options as $option) {
             TestBankQuestionOption::create([
-                'test_bank_question_id' => $question->id,
-                'option_text' => $option['option_text'],
-                'is_correct' => $option['is_correct'],
+                'test_bank_question_id' =>
+                    $question->id,
+
+                'option_text' =>
+                    $option['option_text'],
+
+                'is_correct' =>
+                    $option['is_correct'],
             ]);
         }
     }
-    private function authorizeFaculty(Request $request): void
-    {
+
+    /**
+     * Verify logged-in user is Faculty.
+     */
+    private function authorizeFaculty(
+        Request $request
+    ): void {
         $user = $request->user();
 
-        if (!$user || $user->role !== 'faculty') {
-            abort(403, 'Only faculty members can access the Test Bank.');
+        if (
+            !$user ||
+            $user->role !== 'faculty'
+        ) {
+            abort(
+                403,
+                'Only faculty members can access the Test Bank.'
+            );
         }
     }
-    private function authorizeFacultySubject(Request $request, int $subjectId): void
-    {
+
+    /**
+     * Verify faculty owns one class.
+     */
+    private function authorizeFacultyOwnsClass(
+        Request $request,
+        int $classId
+    ): SchoolClass {
         $user = $request->user();
 
-        if (!$user || $user->role !== 'faculty') {
-            abort(403, 'Only faculty members can access the Test Bank.');
+        if (
+            !$user ||
+            $user->role !== 'faculty'
+        ) {
+            abort(
+                403,
+                'Only faculty members can access the Test Bank.'
+            );
         }
 
-        $teachesSubject = SchoolClass::where('faculty_id', $user->id)
-            ->where('subject_id', $subjectId)
-            ->exists();
+        $schoolClass = SchoolClass::where(
+            'id',
+            $classId
+        )
+            ->where(
+                'faculty_id',
+                $user->id
+            )
+            ->first();
 
-        if (!$teachesSubject) {
-            abort(403, 'You are not authorized to use this subject in your Test Bank.');
+        if (!$schoolClass) {
+            abort(
+                403,
+                'You are not authorized to access this class.'
+            );
         }
+
+        return $schoolClass;
+    }
+
+    /**
+     * Verify faculty owns ALL selected classes
+     * and all classes belong to the selected subject.
+     */
+    private function authorizeFacultyClasses(
+        Request $request,
+        array $classIds,
+        int $subjectId
+    ): void {
+        $user = $request->user();
+
+        if (
+            !$user ||
+            $user->role !== 'faculty'
+        ) {
+            abort(
+                403,
+                'Only faculty members can access the Test Bank.'
+            );
+        }
+
+        $validClassIds = SchoolClass::where(
+            'faculty_id',
+            $user->id
+        )
+            ->where(
+                'subject_id',
+                $subjectId
+            )
+            ->whereIn(
+                'id',
+                $classIds
+            )
+            ->pluck('id')
+            ->map(
+                fn ($id) => (int) $id
+            )
+            ->all();
+
+        sort($validClassIds);
+
+        $requestedClassIds = array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    $classIds
+                )
+            )
+        );
+
+        sort($requestedClassIds);
+
+        if (
+            $validClassIds !==
+            $requestedClassIds
+        ) {
+            abort(
+                403,
+                'One or more selected classes do not belong to you or do not match the selected subject.'
+            );
+        }
+    }
+
+    /**
+     * Enable / Disable a Test Bank question.
+     */
+    public function updateStatus(
+        Request $request,
+        $id
+    ) {
+        $this->authorizeFaculty($request);
+
+        $validated = $request->validate([
+            'is_active' => [
+                'required',
+                'boolean',
+            ],
+        ]);
+
+        $question = TestBankQuestion::where(
+            'faculty_id',
+            $request->user()->id
+        )->findOrFail($id);
+
+        $question->is_active =
+            $validated['is_active'];
+
+        $question->save();
+
+        return response()->json([
+            'status' => true,
+
+            'message' =>
+                $question->is_active
+                    ? 'Question enabled successfully.'
+                    : 'Question disabled successfully.',
+
+            'data' => [
+                'id' => $question->id,
+                'is_active' =>
+                    (bool) $question->is_active,
+            ],
+        ]);
     }
 }

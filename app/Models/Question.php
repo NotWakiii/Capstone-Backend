@@ -6,16 +6,17 @@ use Illuminate\Database\Eloquent\Model;
 
 class Question extends Model
 {
-   protected $fillable = [
-    'exam_id',
-    'question',
-    'question_type',
-    'competency',
-    'answer',
-    'points',
-    'time_limit',
-    'question_order'
-];
+    protected $fillable = [
+        'exam_id',
+        'test_bank_question_id',
+        'question',
+        'question_type',
+        'competency',
+        'answer',
+        'points',
+        'time_limit',
+        'question_order',
+    ];
 
     public function exam()
     {
@@ -35,5 +36,9 @@ class Question extends Model
     public function matchingPairs()
     {
         return $this->hasMany(MatchingPair::class);
+    }
+    public function testBankQuestion()
+    {
+        return $this->belongsTo(TestBankQuestion::class);
     }
 }

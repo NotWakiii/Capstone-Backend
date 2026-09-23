@@ -152,6 +152,9 @@ public function index()
             'questions.*.question' =>
                 'required|string',
 
+            'questions.*.test_bank_question_id' =>
+                'nullable|integer|exists:test_bank_questions,id',
+
             'questions.*.type' =>
                 'required|string',
 
@@ -347,6 +350,10 @@ public function index()
 
                         'exam_id' =>
                             $exam->id,
+
+                        'test_bank_question_id' =>
+                            $item['test_bank_question_id']
+                            ?? null,
 
                         'question' =>
                             $item['question'],
@@ -765,6 +772,9 @@ public function restartExam($id)
             'questions.*.question' =>
                 'required|string',
 
+            'questions.*.test_bank_question_id' =>
+                'nullable|integer|exists:test_bank_questions,id',
+
             'questions.*.type' =>
                 'required|string',
 
@@ -913,6 +923,10 @@ public function restartExam($id)
                         'exam_id' =>
                             $exam->id,
 
+                        'test_bank_question_id' =>
+                            $item['test_bank_question_id']
+                            ?? null,
+
                         'question' =>
                             $item['question'],
 
@@ -1017,21 +1031,21 @@ public function restartExam($id)
             ]);
 
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+    DB::rollBack();
 
-            DB::rollBack();
+    \Log::error('CREATE EXAM ERROR', [
+        'message' => $e->getMessage(),
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+        'trace' => $e->getTraceAsString(),
+    ]);
 
-
-            return response()->json([
-                'status' => false,
-
-                'message' =>
-                    'Failed to update exam',
-
-                'error' =>
-                    $e->getMessage()
-            ], 500);
-        }
+    return response()->json([
+        'message' => 'Failed to create exams.',
+        'error' => $e->getMessage(),
+    ], 500);
+}
     }
 
 

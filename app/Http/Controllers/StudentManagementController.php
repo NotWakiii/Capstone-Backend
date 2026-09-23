@@ -31,8 +31,6 @@ class StudentManagementController extends Controller
                 'name',
                 'email',
                 'sex',
-                'strand_id',
-                'section_id',
                 'role',
                 'status',
                 'created_at',
@@ -72,54 +70,15 @@ class StudentManagementController extends Controller
                 'max:255',
                 'unique:users,email',
             ],
-            'strand_id' => [
-                'required',
-                'integer',
-                'exists:strands,id',
-            ],
-            'section_id' => [
-                'required',
-                'integer',
-                'exists:sections,id',
-            ],
         ]);
 
-        $section = Section::find(
-            $validated['section_id']
-        );
-
-        if (
-            !$section ||
-            (int) $section->strand_id !==
-            (int) $validated['strand_id']
-        ) {
-            return response()->json([
-                'success' => false,
-                'message' => 'The selected section does not belong to the selected strand.',
-                'errors' => [
-                    'section_id' => [
-                        'The selected section does not belong to the selected strand.',
-                    ],
-                ],
-            ], 422);
-        }
-
         $student = User::create([
-            'lrn' => trim(
-                $validated['lrn']
-            ),
-            'name' => trim(
-                $validated['name']
-            ),
-            'sex' =>
-                $validated['sex'],
+            'lrn' => trim($validated['lrn']),
+            'name' => trim($validated['name']),
+            'sex' => $validated['sex'],
             'email' => strtolower(
                 trim($validated['email'])
             ),
-            'strand_id' =>
-                $validated['strand_id'],
-            'section_id' =>
-                $validated['section_id'],
             'role' => 'student',
             'status' => 'active',
             'password' => Hash::make(
@@ -127,18 +86,10 @@ class StudentManagementController extends Controller
             ),
         ]);
 
-        $student->refresh();
-
-        $this->enrollStudentToCurrentClasses($student);
-
-        $student->load([
-            'strand:id,name',
-            'section:id,grade,strand_id,section',
-        ]);
-
         return response()->json([
             'success' => true,
-            'message' => 'Student account created successfully.',
+            'message' =>
+                'Student account created successfully.',
             'data' => $student,
         ], 201);
     }
@@ -180,7 +131,8 @@ class StudentManagementController extends Controller
         if (!$student) {
             return response()->json([
                 'success' => false,
-                'message' => 'Student account not found.',
+                'message' =>
+                    'Student account not found.',
             ], 404);
         }
 
@@ -192,9 +144,7 @@ class StudentManagementController extends Controller
                 Rule::unique(
                     'users',
                     'lrn'
-                )->ignore(
-                    $student->id
-                ),
+                )->ignore($student->id),
             ],
             'name' => [
                 'required',
@@ -215,86 +165,25 @@ class StudentManagementController extends Controller
                 Rule::unique(
                     'users',
                     'email'
-                )->ignore(
-                    $student->id
-                ),
-            ],
-            'strand_id' => [
-                'required',
-                'integer',
-                'exists:strands,id',
-            ],
-            'section_id' => [
-                'required',
-                'integer',
-                'exists:sections,id',
+                )->ignore($student->id),
             ],
         ]);
 
-        $section = Section::find(
-            $validated['section_id']
-        );
-
-        if (
-            !$section ||
-            (int) $section->strand_id !==
-            (int) $validated['strand_id']
-        ) {
-            return response()->json([
-                'success' => false,
-                'message' => 'The selected section does not belong to the selected strand.',
-                'errors' => [
-                    'section_id' => [
-                        'The selected section does not belong to the selected strand.',
-                    ],
-                ],
-            ], 422);
-        }
-
-        $oldSectionId =
-            $student->section_id;
-
         $student->update([
-            'lrn' => trim(
-                $validated['lrn']
-            ),
-            'name' => trim(
-                $validated['name']
-            ),
-            'sex' =>
-                $validated['sex'],
+            'lrn' => trim($validated['lrn']),
+            'name' => trim($validated['name']),
+            'sex' => $validated['sex'],
             'email' => strtolower(
                 trim($validated['email'])
             ),
-            'strand_id' =>
-                $validated['strand_id'],
-            'section_id' =>
-                $validated['section_id'],
         ]);
 
-        if (
-            (int) $oldSectionId !==
-            (int) $student->section_id
-        ) {
-            $this->syncStudentCurrentEnrollments(
-                $student
-            );
-        } elseif (
-            $student->status === 'active'
-        ) {
-            $this->enrollStudentToCurrentClasses(
-                $student
-            );
-        }
-
-        $student->load([
-            'strand:id,name',
-            'section:id,grade,strand_id,section',
-        ]);
+        $student->refresh();
 
         return response()->json([
             'success' => true,
-            'message' => 'Student account updated successfully.',
+            'message' =>
+                'Student account updated successfully.',
             'data' => $student,
         ]);
     }
@@ -351,19 +240,6 @@ class StudentManagementController extends Controller
                 'status' =>
                     $validated['status'],
             ]);
-
-        if (
-            $validated['status'] ===
-            'active'
-        ) {
-            foreach ($students as $student) {
-                $student->status = 'active';
-
-                $this->enrollStudentToCurrentClasses(
-                    $student
-                );
-            }
-        }
 
         return response()->json([
             'success' => true,
@@ -629,87 +505,5 @@ class StudentManagementController extends Controller
             'success' => true,
             'message' => 'Student account deleted successfully.',
         ]);
-    }
-
-    private function enrollStudentToCurrentClasses(
-        User $student
-    ): void {
-        if (
-            $student->role !== 'student' ||
-            $student->status !== 'active'
-        ) {
-            return;
-        }
-
-        if (!$student->section_id) {
-            return;
-        }
-
-        $activeSchoolYear =
-            SchoolYear::where(
-                'status',
-                'active'
-            )->first();
-
-        if (!$activeSchoolYear) {
-            return;
-        }
-
-        $classes = SchoolClass::where(
-            'school_year_id',
-            $activeSchoolYear->id
-        )
-            ->where(
-                'section_id',
-                $student->section_id
-            )
-            ->get();
-
-        foreach ($classes as $class) {
-            ClassStudent::firstOrCreate([
-                'class_id' =>
-                    $class->id,
-                'student_id' =>
-                    $student->id,
-            ]);
-        }
-    }
-
-    private function syncStudentCurrentEnrollments(
-        User $student
-    ): void {
-        $activeSchoolYear =
-            SchoolYear::where(
-                'status',
-                'active'
-            )->first();
-
-        if (!$activeSchoolYear) {
-            return;
-        }
-
-        $currentClassIds =
-            SchoolClass::where(
-                'school_year_id',
-                $activeSchoolYear->id
-            )->pluck('id');
-
-        ClassStudent::where(
-            'student_id',
-            $student->id
-        )
-            ->whereIn(
-                'class_id',
-                $currentClassIds
-            )
-            ->delete();
-
-        if (
-            $student->status === 'active'
-        ) {
-            $this->enrollStudentToCurrentClasses(
-                $student
-            );
-        }
     }
 };

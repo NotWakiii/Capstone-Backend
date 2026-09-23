@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Models\Exam;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
 
 class FacultyClassController extends Controller
 {
@@ -213,6 +214,7 @@ class FacultyClassController extends Controller
 
         $class = SchoolClass::create([
             'faculty_id' => $faculty->id,
+            'class_code' => $this->generateUniqueClassCode(),
             'school_year_id' => $validated['school_year_id'],
             'semester' => $validated['semester'],
             'grade' => $validated['grade'],
@@ -221,8 +223,6 @@ class FacultyClassController extends Controller
             'subject_id' => $validated['subject_id'],
             'section' => $section->section,
         ]);
-
-        $this->syncStudentsToClass($class);
 
         $class->load([
             'schoolYear:id,year,status',
@@ -409,9 +409,6 @@ class FacultyClassController extends Controller
             ], 422);
         }
 
-        $oldSchoolYearId = $class->school_year_id;
-        $oldSectionId = $class->section_id;
-
         $class->update([
             'school_year_id' => $validated['school_year_id'],
             'semester' => $validated['semester'],
@@ -421,18 +418,6 @@ class FacultyClassController extends Controller
             'subject_id' => $validated['subject_id'],
             'section' => $section->section,
         ]);
-
-        if (
-            (int) $oldSchoolYearId !== (int) $class->school_year_id ||
-            (int) $oldSectionId !== (int) $class->section_id
-        ) {
-            $this->syncStudentsToClass(
-                $class,
-                true
-            );
-        } else {
-            $this->syncStudentsToClass($class);
-        }
 
         $class->load([
             'schoolYear:id,year,status',
@@ -498,13 +483,9 @@ class FacultyClassController extends Controller
                         'name',
                         'email',
                         'sex',
-                        'strand_id',
-                        'section_id',
                         'status',
                     ]);
-                },
-                'student.strand:id,name',
-                'student.section:id,grade,strand_id,section',
+                }
             ])
             ->whereHas('student')
             ->get()
@@ -520,7 +501,37 @@ class FacultyClassController extends Controller
             'data' => $students,
         ]);
     }
+    public function availableStudents(Request $request, $id)
+    {
+        $class = SchoolClass::where('faculty_id', $request->user()->id)->find($id);
 
+        if (!$class) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Class not found.',
+            ], 404);
+        }
+
+        $enrolledStudentIds = ClassStudent::where('class_id', $class->id)->pluck('student_id');
+
+        $students = User::where('role', 'student')
+            ->where('status', 'active')
+            ->whereNotIn('id', $enrolledStudentIds)
+            ->orderBy('name')
+            ->get([
+                'id',
+                'lrn',
+                'name',
+                'email',
+                'sex',
+                'status',
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $students,
+        ]);
+    }
     public function storeStudent(Request $request, $id)
     {
         $class = SchoolClass::where(
@@ -559,21 +570,10 @@ class FacultyClassController extends Controller
                 'message' => 'Student account not found.',
             ], 404);
         }
-
         if ($student->status !== 'active') {
             return response()->json([
                 'success' => false,
                 'message' => 'Inactive students cannot be enrolled in a class.',
-            ], 422);
-        }
-
-        if (
-            (int) $student->section_id !==
-            (int) $class->section_id
-        ) {
-            return response()->json([
-                'success' => false,
-                'message' => 'The selected student does not belong to this class section.',
             ], 422);
         }
 
@@ -616,20 +616,7 @@ class FacultyClassController extends Controller
         ]);
 
         $enrollment->load([
-            'student' => function ($query) {
-                $query->select([
-                    'id',
-                    'lrn',
-                    'name',
-                    'email',
-                    'sex',
-                    'strand_id',
-                    'section_id',
-                    'status',
-                ]);
-            },
-            'student.strand:id,name',
-            'student.section:id,grade,strand_id,section',
+            'student:id,lrn,name,email,sex,status'
         ]);
 
         return response()->json([
@@ -637,6 +624,121 @@ class FacultyClassController extends Controller
             'message' => 'Student enrolled successfully.',
             'data' => $enrollment,
         ], 201);
+    }
+    public function importStudents(Request $request, $id)
+    {
+        $class = SchoolClass::where('faculty_id', $request->user()->id)->find($id);
+
+        if (!$class) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Class not found.',
+            ], 404);
+        }
+
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:csv,txt', 'max:2048'],
+        ]);
+
+        $activeSchoolYear = SchoolYear::where('status', 'active')->first();
+
+        if (!$activeSchoolYear || (int) $class->school_year_id !== (int) $activeSchoolYear->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Students can only be enrolled in classes from the active school year.',
+            ], 422);
+        }
+
+        $handle = fopen($request->file('file')->getRealPath(), 'r');
+
+        if (!$handle) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to read the uploaded file.',
+            ], 422);
+        }
+
+        $header = fgetcsv($handle);
+
+        if (!$header) {
+            fclose($handle);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'The CSV file is empty.',
+            ], 422);
+        }
+
+        $header = array_map(function ($value) {
+            return strtolower(trim((string) $value));
+        }, $header);
+
+        $lrnIndex = array_search('lrn', $header, true);
+
+        if ($lrnIndex === false) {
+            fclose($handle);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'The CSV file must contain an LRN column.',
+            ], 422);
+        }
+
+        $added = 0;
+        $alreadyEnrolled = 0;
+        $notFound = 0;
+        $inactive = 0;
+
+        while (($row = fgetcsv($handle)) !== false) {
+            if (!isset($row[$lrnIndex])) continue;
+
+            $lrn = trim($row[$lrnIndex]);
+
+            if ($lrn === '') continue;
+
+            $student = User::where('role', 'student')
+                ->where('lrn', $lrn)
+                ->first();
+
+            if (!$student) {
+                $notFound++;
+                continue;
+            }
+
+            if ($student->status !== 'active') {
+                $inactive++;
+                continue;
+            }
+
+            $exists = ClassStudent::where('class_id', $class->id)
+                ->where('student_id', $student->id)
+                ->exists();
+
+            if ($exists) {
+                $alreadyEnrolled++;
+                continue;
+            }
+
+            ClassStudent::create([
+                'class_id' => $class->id,
+                'student_id' => $student->id,
+            ]);
+
+            $added++;
+        }
+
+        fclose($handle);
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$added} student(s) enrolled successfully.",
+            'data' => [
+                'added' => $added,
+                'already_enrolled' => $alreadyEnrolled,
+                'not_found' => $notFound,
+                'inactive' => $inactive,
+            ],
+        ]);
     }
 
     public function destroyStudent(
@@ -676,56 +778,6 @@ class FacultyClassController extends Controller
         ]);
     }
 
-    private function syncStudentsToClass(
-        SchoolClass $class,
-        bool $removeExisting = false
-    ): void {
-        $activeSchoolYear = SchoolYear::where(
-            'status',
-            'active'
-        )->first();
-
-        if (!$activeSchoolYear) {
-            return;
-        }
-
-        if (
-            (int) $class->school_year_id !==
-            (int) $activeSchoolYear->id
-        ) {
-            return;
-        }
-
-        if ($removeExisting) {
-            ClassStudent::where(
-                'class_id',
-                $class->id
-            )->delete();
-        }
-
-        $students = User::where(
-            'role',
-            'student'
-        )
-            ->where(
-                'status',
-                'active'
-            )
-            ->where(
-                'section_id',
-                $class->section_id
-            )
-            ->get([
-                'id',
-            ]);
-
-        foreach ($students as $student) {
-            ClassStudent::firstOrCreate([
-                'class_id' => $class->id,
-                'student_id' => $student->id,
-            ]);
-        }
-    }
     public function assessments($id)
     {
         $class = SchoolClass::where(
@@ -757,4 +809,15 @@ class FacultyClassController extends Controller
             'data' => $assessments,
         ]);
     }
+    private function generateUniqueClassCode(): string
+    {
+        do {
+            $code = strtoupper(Str::random(6));
+        } while (
+            SchoolClass::where('class_code', $code)->exists()
+        );
+
+        return $code;
+    }
 };
+
