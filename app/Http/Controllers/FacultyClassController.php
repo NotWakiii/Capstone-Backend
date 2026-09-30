@@ -77,8 +77,9 @@ class FacultyClassController extends Controller
                 'sections' => $sections,
                 'curricula' => $curricula,
                 'semesters' => [
-                    '1st Semester',
-                    '2nd Semester',
+                    '1st Trimester',
+                    '2nd Trimester',
+                    '3rd Trimester',
                 ],
                 'grades' => [
                     'Grade 11',
@@ -100,10 +101,11 @@ class FacultyClassController extends Controller
             ],
             'semester' => [
                 'required',
-                Rule::in([
-                    '1st Semester',
-                    '2nd Semester',
-                ]),
+            Rule::in([
+                '1st Trimester',
+                '2nd Trimester',
+                '3rd Trimester',
+            ]),
             ],
             'grade' => [
                 'required',
@@ -292,10 +294,11 @@ class FacultyClassController extends Controller
             ],
             'semester' => [
                 'required',
-                Rule::in([
-                    '1st Semester',
-                    '2nd Semester',
-                ]),
+            Rule::in([
+                '1st Trimester',
+                '2nd Trimester',
+                '3rd Trimester',
+            ]),
             ],
             'grade' => [
                 'required',

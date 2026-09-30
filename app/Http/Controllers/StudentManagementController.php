@@ -458,8 +458,6 @@ class StudentManagementController extends Controller
 
                 $student->refresh();
 
-                $this->enrollStudentToCurrentClasses($student);
-
                 $imported++;
             }
 

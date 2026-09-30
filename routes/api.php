@@ -48,7 +48,6 @@ use App\Http\Controllers\StudentClassController;
 
 // Feedback
 use App\Http\Controllers\AssessmentFeedbackController;
-
 /*
 |--------------------------------------------------------------------------
 | PUBLIC AUTH ROUTES
